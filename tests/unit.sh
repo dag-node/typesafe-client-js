@@ -108,6 +108,7 @@ run "x" filter --task t --config "${conf}"; expect_refusal "a file over the size
 printf 'TYPESAFE_API_KEY=%s\n' "${KEY}" > "${conf}"; chmod 0660 "${conf}"
 run "" filter --task t --config "${conf}"; expect_refusal "a valid file, then an empty listing" 2 input
 run "$(printf 'x:%d: y\n' {1..1001})" filter --task t --config "${conf}"; expect_refusal "a listing over the item bound" 2 input
+run "$(head -c 4000001 /dev/zero | tr '\0' x)" filter --task t --config "${conf}"; expect_refusal "stdin over the input bound, refused as it is read" 2 input
 run "$(printf 'a:1: y\nb:2: z\nnot a finding\n')" filter --task t --format prose-check --config "${conf}"; expect_refusal "a prose-check record the parser cannot place" 2 input
 # The refused line is quoted on stderr; the escape and the carriage return it carries are not.
 run "$(printf 'bad \033[31mred\033[0m\r%s\n' "$(printf 'a%.0s' {1..400})")" filter --task t --format prose-check --config "${conf}"; expect_refusal "a refused line carrying an escape sequence" 2 input

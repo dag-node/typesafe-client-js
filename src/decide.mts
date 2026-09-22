@@ -23,7 +23,7 @@
 //
 // The triage template is deferred; asking for it exits 2 with the reason.
 
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, readSync } from "node:fs";
 import { readConfig } from "./config.mjs";
 import { decideFilter, LIMITS, makeClient, type Decision, type NoulRow, type RequestRecord } from "./core.mjs";
 import { DecideError, inputError, configurationError, oneLine } from "./errors.mjs";
@@ -91,12 +91,29 @@ function parseArgs(argv: readonly string[]): Args {
     return { template, task, format, threshold, config, usageLog, help };
 }
 
+/**
+ * stdin as text, read in chunks and refused the moment it passes the input bound, so a stream far over it is not
+ * buffered whole first. The bound is applied here to bytes, of which a character is at least one; the parser
+ * applies it to characters again.
+ */
 function readStdin(): string {
-    try {
-        return readFileSync(0, "utf8");
-    } catch (err) {
-        throw inputError(`stdin is not readable (${err instanceof Error ? err.message : String(err)}) -- pipe a listing in`);
+    const cap = LIMITS.maxInputChars;
+    const chunk = Buffer.alloc(64 * 1024);
+    const chunks: Buffer[] = [];
+    let length = 0;
+    for (;;) {
+        let n: number;
+        try {
+            n = readSync(0, chunk, 0, chunk.length, null);
+        } catch (err) {
+            throw inputError(`stdin is not readable (${err instanceof Error ? err.message : String(err)}) -- pipe a listing in`);
+        }
+        if (n === 0) break;
+        length += n;
+        if (length > cap) throw inputError(`the input is over ${cap} bytes. Narrow the listing at its source`, { bytes: length });
+        chunks.push(Buffer.from(chunk.subarray(0, n)));
     }
+    return Buffer.concat(chunks, length).toString("utf8");
 }
 
 function summary(decision: Decision<NoulRow>, setAside: number, format: Format): string {
