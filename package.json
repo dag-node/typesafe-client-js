@@ -1,0 +1,31 @@
+{
+  "name": "@dagnode/typesafe-client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Minimal, unofficial TypeScript client for the TypeSafe System One API, compiled to plain ESM with no runtime dependency.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dag-node/typesafe-client-js.git"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.json",
+    "test": "bash tests/unit.sh"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.4",
+    "@typesafe-ai/sdk": "^0.6.0",
+    "typescript": "7.0.2"
+  }
+}
