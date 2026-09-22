@@ -104,6 +104,8 @@ write_conf 'TYPESAFE_MODEL=jev 1.13.0'
 run "x" filter --task t --config "${conf}"; expect_refusal "a model id carrying a space" 3 configuration
 { printf 'TYPESAFE_API_KEY=%s\n' "${KEY}"; head -c 70000 /dev/zero | tr '\0' '#'; printf '\n'; } > "${conf}"; chmod 0600 "${conf}"
 run "x" filter --task t --config "${conf}"; expect_refusal "a file over the size bound" 3 configuration
+mkfifo "${TESTDIR}/fifo.conf"; chmod 0600 "${TESTDIR}/fifo.conf"
+run "x" filter --task t --config "${TESTDIR}/fifo.conf"; expect_refusal "a FIFO, refused without blocking on the open" 3 configuration
 # A valid file: the next refusal is the listing's, so the file was accepted (group-writable by ACL mask is fine).
 printf 'TYPESAFE_API_KEY=%s\n' "${KEY}" > "${conf}"; chmod 0660 "${conf}"
 run "" filter --task t --config "${conf}"; expect_refusal "a valid file, then an empty listing" 2 input

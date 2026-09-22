@@ -4,7 +4,8 @@
 // leak or reach another host: a symlink, a file readable or writable by other, a placeholder key, a base URL that
 // is not https or whose host the file does not also name in TYPESAFE_ENDPOINT_HOST. Every option the transport
 // takes is pinned from this file, so the client does not read an environment variable for one. The file is opened
-// for reading only.
+// for reading only, with O_NOFOLLOW, and every check runs on the open descriptor: the file that is checked is the
+// file that is read, so a path swapped between the two is not a way past the checks.
 //
 // The file carries the values an operator tunes per host as well -- the keep threshold, the uncertain band and the
 // per-attempt timeout -- because an operator's file survives an upgrade of the artifact, where the constants in
@@ -17,7 +18,7 @@
 // refusal names the key, shows the value it read, and states the form expected. The key's own value is the one
 // exception: a refusal reports its length and character class, and leaves the text out.
 
-import { lstatSync, readFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 import {
     DEFAULT_BASE_URL,
     DEFAULT_ENDPOINT_HOST,
@@ -202,33 +203,54 @@ function readBaseURL(kv: ReadonlyMap<string, string>, endpointHost: string): str
     return url.origin;
 }
 
-/** Reads and validates the configuration file at `path`; every refusal is a configuration error naming the cause. */
-export function readConfig(path: string): TypeSafeConfig {
-    let mode: number;
-    let size: number;
+/**
+ * Opens `path` without following a final symlink, checks the open descriptor -- a regular file, no other bits, under
+ * the size bound -- and reads it whole. A FIFO does not block the open (O_NONBLOCK) and is refused on the type check.
+ */
+function readConfigFile(path: string): string {
+    // O_NOFOLLOW is absent on Windows, where every symlink check is the platform's own.
+    const flags = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0);
+    let fd: number;
     try {
-        const st = lstatSync(path);
-        mode = st.mode & 0o777;
-        size = st.size;
+        fd = openSync(path, flags);
+    } catch (err) {
+        const code = err instanceof Error && "code" in err ? String(err.code) : "unknown";
+        if (code === "ELOOP") throw configurationError(`configuration file ${path} is a symlink`, { path });
+        throw configurationError(`configuration file ${path} is not readable (${code})`, { path });
+    }
+    try {
+        const st = fstatSync(fd);
+        const mode = st.mode & 0o777;
         if (st.isSymbolicLink()) throw configurationError(`configuration file ${path} is a symlink`, { path });
         if (!st.isFile()) throw configurationError(`configuration file ${path} is not a regular file`, { path });
-    } catch (err) {
-        // A DecideError carries its own message; only a failed lstatSync is reported as one here.
-        if (err instanceof Error && err.name !== "DecideError" && "code" in err) {
-            throw configurationError(`configuration file ${path} is not readable (${String(err.code)})`, { path });
+        // The other bits alone are refused. A group bit is not read: on a file under a claimed project the group
+        // class shows the ACL mask, which the collaborative tree sets to rwx by design, and the group is the account
+        // that runs the command, which already reads the key -- a group write there does not widen access.
+        if (mode & 0o004) throw configurationError(`configuration file ${path} is world-readable -- it holds a credential; chmod o-r`, { path, mode: mode.toString(8) });
+        if (mode & 0o002) throw configurationError(`configuration file ${path} is world-writable -- chmod o-w`, { path, mode: mode.toString(8) });
+        if (st.size > MAX_CONFIG_BYTES) {
+            throw configurationError(`configuration file ${path} is ${st.size} bytes -- a configuration is at most ${MAX_CONFIG_BYTES}`, { path, size: st.size });
         }
-        throw err;
+        // Read through the same descriptor, one byte past the bound: a file that grew since the stat is refused too.
+        const buffer = Buffer.alloc(MAX_CONFIG_BYTES + 1);
+        let length = 0;
+        for (;;) {
+            const n = readSync(fd, buffer, length, buffer.length - length, null);
+            if (n === 0) break;
+            length += n;
+            if (length > MAX_CONFIG_BYTES) {
+                throw configurationError(`configuration file ${path} is over ${MAX_CONFIG_BYTES} bytes -- a configuration is at most ${MAX_CONFIG_BYTES}`, { path });
+            }
+        }
+        return buffer.toString("utf8", 0, length);
+    } finally {
+        closeSync(fd);
     }
-    // The other bits alone are refused. A group bit is not read: on a file under a claimed project the group class
-    // shows the ACL mask, which the collaborative tree sets to rwx by design, and the group is the account that runs
-    // the command, which already reads the key -- a group write there does not widen access.
-    if (mode & 0o004) throw configurationError(`configuration file ${path} is world-readable -- it holds a credential; chmod o-r`, { path, mode: mode.toString(8) });
-    if (mode & 0o002) throw configurationError(`configuration file ${path} is world-writable -- chmod o-w`, { path, mode: mode.toString(8) });
-    if (size > MAX_CONFIG_BYTES) {
-        throw configurationError(`configuration file ${path} is ${size} bytes -- a configuration is at most ${MAX_CONFIG_BYTES}`, { path, size });
-    }
+}
 
-    const kv = parseKeyValue(readFileSync(path, "utf8"));
+/** Reads and validates the configuration file at `path`; every refusal is a configuration error naming the cause. */
+export function readConfig(path: string): TypeSafeConfig {
+    const kv = parseKeyValue(readConfigFile(path));
     const apiKey = readApiKey(kv, path);
     const endpointHost = readHostname(kv, "TYPESAFE_ENDPOINT_HOST", DEFAULT_ENDPOINT_HOST);
     const baseURL = readBaseURL(kv, endpointHost);
