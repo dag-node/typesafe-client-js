@@ -80,10 +80,13 @@ export interface Decision<Row> {
 // filesystem access. A leading "/" is admitted because a compiler reports an absolute path, and an id that
 // names the file beats an L<n> in the summary line the agent reads.
 const ID_RE = /^[A-Za-z0-9/][A-Za-z0-9._:/@+-]{0,199}$/;
+// The two names the grammar admits that the reviver in transport.mts drops from every body: an item so named
+// could never be answered, so it is not an id.
+const RESERVED_IDS: ReadonlySet<string> = new Set(["constructor", "prototype"]);
 
 /** Whether `id` is an item id this loop accepts; parsers.mts derives an id only where this holds. */
 export function isItemId(id: string): boolean {
-    return ID_RE.test(id);
+    return ID_RE.test(id) && !RESERVED_IDS.has(id);
 }
 const cut = (text: string, max: number): string => (text.length <= max ? text : `${text.slice(0, max)} [...cut at ${max} chars]`);
 
@@ -100,7 +103,7 @@ export function normalizeItems(items: readonly Item[]): Normalized {
     const seen = new Set<string>();
     let cutCount = 0;
     const out = items.map((item, index) => {
-        if (!ID_RE.test(item.id)) throw inputError(`item ${index} has an invalid id '${item.id.slice(0, 40)}'`);
+        if (!isItemId(item.id)) throw inputError(`item ${index} has an invalid id '${item.id.slice(0, 40)}'`);
         if (seen.has(item.id)) throw inputError(`item id '${item.id}' repeats`);
         seen.add(item.id);
         if (item.text.trim() === "") throw inputError(`item '${item.id}' has no text`);

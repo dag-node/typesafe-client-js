@@ -5,8 +5,9 @@
 # makes before a request leaves the process with the exit status its header documents and one stderr line naming
 # the class; the configuration file's refusals hold on the world bits, on a symlink, and on each value whose form
 # config.mts states; the request carries the file's own origin, key and model, and an environment variable of the
-# same name changes none of the three; the two stdin parsers keep a `path:line` id and refuse a record they cannot
-# place; and the answer contract rejects each malformed body it is driven with. No case here opens a connection.
+# same name changes none of the three; the three stdin parsers keep a `path:line` id once, fall back to `L<n>` on a
+# repeat, refuse a record they cannot place and read a hostile line in linear time; and the answer contract rejects
+# each malformed body it is driven with. No case here opens a connection.
 #
 # Hermetic: fixtures in the suite's own temporary directory, removed on exit.
 set -euo pipefail
@@ -114,7 +115,7 @@ if ! grep -qF "${KEY}" "${TESTDIR}/err"; then pass "no refusal line carries the 
 # injected and records what it was handed. Every case prints one line: `ok <what>` or `FAIL <what>: <why>`.
 cat > "${TESTDIR}/drive.mjs" <<EOF
 import { parseLines, parseProseCheck, parseMsbuild, parse } from "${DIR}/parsers.mjs";
-import { contractProblems, makeClient, decideFilter, LIMITS, chunkItems, normalizeItems } from "${DIR}/core.mjs";
+import { contractProblems, makeClient, decideFilter, LIMITS, chunkItems, normalizeItems, isItemId } from "${DIR}/core.mjs";
 import { filter } from "${DIR}/templates.mjs";
 import { readConfig } from "${DIR}/config.mjs";
 const report = (cond, what, why = "") => console.log(cond ? \`ok \${what}\` : \`FAIL \${what}: \${why}\`);
@@ -131,6 +132,22 @@ report(chunkItems(many).map((c) => c.length).join("/") === want.join("/"), \`chu
 // L<n> rather than failing the listing, which is what every MSBuild log at normal verbosity depends on.
 const clock = parseLines("Build started 9/22/2026 10:18:09 AM.\\nsrc/a.sh:12: real\\nTime Elapsed 00:00:01.81\\n").items;
 report(clock.length === 3 && clock[0].id === "L1" && clock[1].id === "src/a.sh:12" && clock[2].id === "L3", "lines: a clock time falls back to L<n>", JSON.stringify(clock));
+// Two findings on one line (shellcheck -f gcc) derive one path:line: the second keeps its line under L<n>.
+const twice = parseLines("a.sh:3:5: warning SC2086\\na.sh:3:9: note SC2046\\n").items;
+report(twice.length === 2 && twice[0].id === "a.sh:3" && twice[1].id === "L2", "lines: a repeated path:line falls back to L<n>", JSON.stringify(twice));
+// A location spelled like the fallback ("L9 : error") is not taken as an id, so no fallback can collide with one.
+const lShaped = parseMsbuild("real.cs(1,2): error CS1: m\\nL9 : error CS2: n\\n").items;
+report(lShaped.length === 2 && lShaped[0].id === "real.cs:1" && lShaped[1].id === "L2", "msbuild: an L<n>-shaped location falls back to its own ordinal", JSON.stringify(lShaped));
+const pcTwice = parseProseCheck("d.md:5: rule-a [x] -- hint\\n    one\\nd.md:5: rule-b [y] -- hint\\n    two\\n\\u0001x:1: rule-c -- hint\\n    three\\n").items;
+report(pcTwice.length === 3 && pcTwice[0].id === "d.md:5" && pcTwice[1].id === "L2" && pcTwice[2].id === "L3", "prose-check: a repeated and an invalid path:line fall back to L<n>", JSON.stringify(pcTwice));
+report(!isItemId("constructor") && !isItemId("prototype") && isItemId("src/a.cs:1"), "ids: the names the body reviver drops are not ids");
+// A line of spaces then one character made the whole-line diagnostic pattern backtrack for seconds (3 s at 300
+// spaces, 34 s at 800); the marker search reads it in the time its length costs.
+const slowLine = " ".repeat(LIMITS.maxParseLineChars - 1) + "x";
+const t0 = Date.now();
+const fast = parseMsbuild(slowLine + "\\nreal.cs(1,2): error CS1: m\\n");
+const slowMs = Date.now() - t0;
+report(fast.items.length === 1 && slowMs < 1000, \`msbuild: a line of spaces parses in linear time (\${slowMs} ms)\`);
 
 // msbuild: diagnostics are kept with the code as the rule, the summary repeat collapses, the rest is set aside.
 const log = [
