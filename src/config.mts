@@ -9,7 +9,8 @@
 // The file carries the values an operator tunes per host as well -- the keep threshold, the uncertain band and the
 // per-attempt timeout -- because an operator's file survives an upgrade of the artifact, where the constants in
 // core.mts are replaced along with it. A value outside its documented range is refused rather than replaced with
-// the default: a threshold that silently reverts changes what is kept, with no line saying so.
+// the default: a threshold that silently reverts changes what is kept, with no line saying so. The default for
+// each key is the one defaults.mts exports; this file holds no copy.
 //
 // Every value here is untrusted input that an operator hand-edits, so each one is checked against the form its use
 // requires -- a probability, a whole number of milliseconds, a bounded token, a hostname, an https origin -- and a
@@ -17,18 +18,15 @@
 // exception: a refusal reports its length and character class, and leaves the text out.
 
 import { lstatSync, readFileSync } from "node:fs";
+import {
+    DEFAULT_BASE_URL,
+    DEFAULT_ENDPOINT_HOST,
+    DEFAULT_MODEL,
+    DEFAULT_THRESHOLD,
+    DEFAULT_TIMEOUT_MS,
+    DEFAULT_UNCERTAIN_BAND,
+} from "./defaults.mjs";
 import { configurationError } from "./errors.mjs";
-
-export const DEFAULT_BASE_URL = "https://api.typesafe.ai";
-export const DEFAULT_ENDPOINT_HOST = "api.typesafe.ai";
-/** A versioned model, not the moving alias: the vendor documents that `jev-latest` changes answers on a release. */
-export const DEFAULT_MODEL = "jev-1.13.0";
-/** The least P(true) that keeps an item. */
-export const DEFAULT_THRESHOLD = 0.5;
-/** The band of P(true) reported as uncertain beside the kept set. */
-export const DEFAULT_UNCERTAIN_BAND: readonly [number, number] = [0.35, 0.65];
-/** One attempt. Sized under core.mts's total budget, which bounds a whole invocation. */
-export const DEFAULT_TIMEOUT_MS = 15_000;
 
 /** The largest file read. A configuration past it is refused rather than parsed from a prefix. */
 const MAX_CONFIG_BYTES = 64 * 1024;

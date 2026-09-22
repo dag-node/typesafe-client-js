@@ -75,8 +75,8 @@ to the request's `Authorization` header; the client does not write it to
 `process.env`, and does not read one from there either.
 
 `src/defaults.mts` holds the fallback for each of those keys and no other
-code, so the values an operator may change are one file rather than a
-search. The request bounds are deliberately not among them: the chunk size,
+code, and `config.mts` imports them from there, so the values an operator
+may change are one file rather than a search. The request bounds are deliberately not among them: the chunk size,
 the item cut and the state budget are chosen against each other, and they
 stay in `core.mts` with the code that reads them.
 
