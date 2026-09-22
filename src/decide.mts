@@ -127,14 +127,14 @@ async function main(argv: readonly string[]): Promise<number> {
         process.stdout.write(`${USAGE}\n`);
         return 0;
     }
-    if (args.template === "") throw inputError(`a template is required\n${USAGE}`);
+    if (args.template === "") throw inputError("a template is required -- the one dispatched is filter; run --help for the options");
     if (args.template === "triage") throw inputError("the triage template is deferred and not dispatched in this release; use the checker's full output");
-    if (args.template !== "filter") throw inputError(`unknown template '${args.template}'\n${USAGE}`);
+    if (args.template !== "filter") throw inputError(`unknown template '${args.template}' -- the one dispatched is filter; run --help for the options`);
     if (args.task.trim() === "") throw inputError("filter needs --task \"<one sentence>\"");
     if (args.task.length > MAX_TASK_CHARS) throw inputError(`--task is ${args.task.length} chars; the bound is ${MAX_TASK_CHARS}`);
 
     if (args.config === undefined || args.config === "") {
-        throw configurationError(`--config <file> is required: it names the file holding the API key\n${USAGE}`);
+        throw configurationError("--config <file> is required -- it names the file holding the API key; run --help for the options");
     }
     const config = readConfig(args.config);
     const { items, setAside } = parse(args.format, readStdin());

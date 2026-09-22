@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // src/help.mts
 // The command's help text, kept apart from the command so the words an operator reads are edited without touching
-// argument parsing. It is printed for `--help` and appended to the refusals a reader can act on -- a missing
-// template, an unknown one, an absent `--config` -- so the correction is on screen beside the complaint.
+// argument parsing. It is printed for `--help` alone: a refusal prints one line and names `--help`, so a caller
+// reading stderr for the failure class gets that line and not a screen of options it did not ask for.
 //
 // The option list and the exit statuses here restate what decide.mts implements; a flag added there is added here.
 
