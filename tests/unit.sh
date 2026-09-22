@@ -104,8 +104,16 @@ write_conf 'TYPESAFE_MODEL=jev 1.13.0'
 run "x" filter --task t --config "${conf}"; expect_refusal "a model id carrying a space" 3 configuration
 { printf 'TYPESAFE_API_KEY=%s\n' "${KEY}"; head -c 70000 /dev/zero | tr '\0' '#'; printf '\n'; } > "${conf}"; chmod 0600 "${conf}"
 run "x" filter --task t --config "${conf}"; expect_refusal "a file over the size bound" 3 configuration
+write_conf "TYPESAFE_BASE_URL=https://user:hunter2@api.typesafe.ai"
+run "x" filter --task t --config "${conf}"; expect_refusal "a base URL carrying a userinfo" 3 configuration
+if ! grep -qF "hunter2" "${TESTDIR}/err"; then pass "the userinfo refusal leaves the password out"; else fail "the userinfo refusal shows the password"; fi
 mkfifo "${TESTDIR}/fifo.conf"; chmod 0600 "${TESTDIR}/fifo.conf"
 run "x" filter --task t --config "${TESTDIR}/fifo.conf"; expect_refusal "a FIFO, refused without blocking on the open" 3 configuration
+# A byte-order mark, a quoted key and a trailing comment are all read past: the refusal that follows is the next
+# key's, so the key itself was accepted.
+printf '\xef\xbb\xbfTYPESAFE_API_KEY="%s" # issued 2026-09\nTYPESAFE_THRESHOLD=2\n' "${KEY}" > "${conf}"; chmod 0600 "${conf}"
+run "x" filter --task t --config "${conf}"; expect_refusal "a BOM, a quoted key with a comment after it, then a bad threshold" 3 configuration
+if [[ "${err}" == *"TYPESAFE_THRESHOLD"* ]]; then pass "the quoted key was accepted: the refusal names the threshold"; else fail "the refusal is not the threshold's: ${err}"; fi
 # A valid file: the next refusal is the listing's, so the file was accepted (group-writable by ACL mask is fine).
 printf 'TYPESAFE_API_KEY=%s\n' "${KEY}" > "${conf}"; chmod 0660 "${conf}"
 run "" filter --task t --config "${conf}"; expect_refusal "a valid file, then an empty listing" 2 input

@@ -16,7 +16,8 @@
 // Every value here is untrusted input that an operator hand-edits, so each one is checked against the form its use
 // requires -- a probability, a whole number of milliseconds, a bounded token, a hostname, an https origin -- and a
 // refusal names the key, shows the value it read, and states the form expected. The key's own value is the one
-// exception: a refusal reports its length and character class, and leaves the text out.
+// exception: a refusal reports its length and character class, and leaves the text out. A base URL carrying a
+// userinfo is shown without it for the same reason.
 
 import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 import {
@@ -61,20 +62,26 @@ export interface TypeSafeConfig {
 }
 
 /**
- * The subset of the project's KEY=value grammar the file needs: trimmed, one matched quote layer, `#` starts
- * a comment at line start or after whitespace, a repeated key takes its last assignment, only UPPERCASE keys count.
+ * The subset of the project's KEY=value grammar the file needs: a leading byte-order mark dropped, lines trimmed,
+ * one matched quote layer (a comment may follow the closing quote), `#` starts a comment at line start or after
+ * whitespace, a repeated key takes its last assignment, only UPPERCASE keys count.
  */
 export function parseKeyValue(text: string): ReadonlyMap<string, string> {
     const out = new Map<string, string>();
-    for (const raw of text.split(/\r?\n/)) {
+    for (const raw of text.replace(/^\uFEFF/, "").split(/\r?\n/)) {
         const line = raw.trim();
         if (line === "" || line.startsWith("#")) continue;
         const eq = line.indexOf("=");
         if (eq < 0) continue;
         const key = line.slice(0, eq).trim();
         let value = line.slice(eq + 1).trim();
-        if (value.length >= 2 && ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))) {
+        const quote = value[0];
+        const quoted = quote === '"' || quote === "'";
+        const close = quoted ? value.indexOf(quote, 1) : -1;
+        if (quoted && value.length >= 2 && value.endsWith(quote)) {
             value = value.slice(1, -1);
+        } else if (close > 0 && /^\s#/.test(value.slice(close + 1))) {
+            value = value.slice(1, close);
         } else {
             const hash = value.search(/\s#/);
             if (hash >= 0) value = value.slice(0, hash).trim();
@@ -191,8 +198,12 @@ function readBaseURL(kv: ReadonlyMap<string, string>, endpointHost: string): str
     if (url.protocol !== "https:") {
         throw configurationError(`${key} '${shown(raw)}' is ${url.protocol} -- the key is sent over https alone`, { key });
     }
-    if (url.pathname !== "/" || url.search !== "" || url.hash !== "" || url.username !== "" || url.password !== "") {
-        throw configurationError(`${key} '${shown(raw)}' carries a path, query or credential -- give the origin alone, as ${DEFAULT_BASE_URL}`, { key });
+    if (url.username !== "" || url.password !== "") {
+        // Shown without the userinfo: a password in the file is a secret even where the file is wrong.
+        throw configurationError(`${key} '${shown(`${url.protocol}//***@${url.host}${url.pathname}`)}' carries a credential -- give the origin alone, as ${DEFAULT_BASE_URL}`, { key });
+    }
+    if (url.pathname !== "/" || url.search !== "" || url.hash !== "") {
+        throw configurationError(`${key} '${shown(raw)}' carries a path, query or fragment -- give the origin alone, as ${DEFAULT_BASE_URL}`, { key });
     }
     if (url.hostname !== endpointHost) {
         throw configurationError(
