@@ -13,7 +13,8 @@ Report here only problems in this client's handling of:
 - credentials (logs, errors, argv, environment, wrong host)
 - responses that bypass the checks in `transport.mts`
 - config files accepted by `config.mts` that should be rejected
-- input that exceeds the bounds enforced in `core.mts`
+- input that exceeds the bounds enforced in `core.mts`, or a line that makes
+  a parser in `parsers.mts` take more than linear time
 
 ## Supported versions
 

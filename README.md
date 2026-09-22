@@ -28,10 +28,11 @@ the same output and is the path to take where the compiler in
 `node_modules` cannot be executed: it picks whichever compiler runs at the
 version `package.json` pins, and refuses any other version.
 
-`bash tests/unit.sh` (also `npm test`) runs the offline suite: 62 checks
-over every refusal the command makes before a request, both stdin parsers,
-the answer contract, and the pinning of the file's endpoint, key and model
-over an environment variable of the same name. No case opens a connection.
+`bash tests/unit.sh` (also `npm test`) runs the offline suite: 82 checks
+over every refusal the command makes before a request, the three stdin
+parsers, the answer contract, each gate on a hostile response, and the
+pinning of the file's endpoint, key and model over an environment variable
+of the same name. No case opens a connection.
 It runs against `dist/`, so it follows the build rather than preceding it,
 and CI fails on it.
 
@@ -70,9 +71,13 @@ the model; the client refuses a symlink, a file other users can read or
 write, a placeholder key, a base URL that is not HTTPS, and a host the file
 does not also name. Two modes satisfy that check: `0600` when you own the
 file and run the command yourself, and `0640 root:<group>` when a service
-account reads it. The key is read at call time and travels from that file
-to the request's `Authorization` header; the client does not write it to
-`process.env`, and does not read one from there either.
+account reads it. The file is opened without following a symlink and every
+check runs on the open descriptor, so the file checked is the file read.
+The key is read at call time and travels from that file to the request's
+`Authorization` header; the client does not write it to `process.env`, and
+does not read one from there either. A redirect from the origin is not
+followed: it is refused as the provider's answer, so neither the key nor the
+listing reaches the host it names.
 
 `src/defaults.mts` holds the fallback for each of those keys and no other
 code, and `config.mts` imports them from there, so the values an operator
@@ -134,6 +139,14 @@ does not reach `JSON.parse`. The projection rebuilds the documented shape on a
 null-prototype object, reading own properties only and walking the ids the
 caller asked for, and it drops rather than coerces, so the contract check
 still reports what it could not fill.
+
+The listing is untrusted too: stdin is refused the moment it passes the
+input bound rather than buffered whole, every parser pattern runs in time
+linear in the line, a `path:line` id is taken only where it is well-formed
+and not yet taken (a second finding on the same line keeps its line as
+`L<n>`), and the one stderr line is rendered with every control character
+from an input or a body replaced, so nothing quoted in it can add a line or
+style a terminal.
 
 ## Using the build output
 
