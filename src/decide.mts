@@ -26,7 +26,7 @@
 import { appendFileSync, readFileSync } from "node:fs";
 import { readConfig } from "./config.mjs";
 import { decideFilter, LIMITS, makeClient, type Decision, type NoulRow, type RequestRecord } from "./core.mjs";
-import { DecideError, inputError, configurationError } from "./errors.mjs";
+import { DecideError, inputError, configurationError, oneLine } from "./errors.mjs";
 import { USAGE } from "./help.mjs";
 import { FORMATS, parse, type Format } from "./parsers.mjs";
 import { filter, MAX_TASK_CHARS, TEMPLATE_VERSION } from "./templates.mjs";
@@ -190,7 +190,7 @@ try {
         process.stderr.write(`${err.describe()}\n`);
         process.exitCode = err.exitStatus;
     } else {
-        process.stderr.write(`decide: unexpected: ${err instanceof Error ? err.message : String(err)}\n`);
+        process.stderr.write(`${oneLine(`decide: unexpected: ${err instanceof Error ? err.message : String(err)}`)}\n`);
         process.exitCode = 1;
     }
 }

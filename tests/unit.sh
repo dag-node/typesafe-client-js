@@ -108,6 +108,9 @@ printf 'TYPESAFE_API_KEY=%s\n' "${KEY}" > "${conf}"; chmod 0660 "${conf}"
 run "" filter --task t --config "${conf}"; expect_refusal "a valid file, then an empty listing" 2 input
 run "$(printf 'x:%d: y\n' {1..1001})" filter --task t --config "${conf}"; expect_refusal "a listing over the item bound" 2 input
 run "$(printf 'a:1: y\nb:2: z\nnot a finding\n')" filter --task t --format prose-check --config "${conf}"; expect_refusal "a prose-check record the parser cannot place" 2 input
+# The refused line is quoted on stderr; the escape and the carriage return it carries are not.
+run "$(printf 'bad \033[31mred\033[0m\r%s\n' "$(printf 'a%.0s' {1..400})")" filter --task t --format prose-check --config "${conf}"; expect_refusal "a refused line carrying an escape sequence" 2 input
+if [[ "$(wc -l <<<"${err}")" -eq 1 ]] && ! grep -q $'\033' "${TESTDIR}/err" && ! grep -q $'\r' "${TESTDIR}/err"; then pass "the stderr line holds no control character from the input"; else fail "stderr carries a control character: $(cat -A "${TESTDIR}/err" | head -c 200)"; fi
 if ! grep -qF "${KEY}" "${TESTDIR}/err"; then pass "no refusal line carries the key"; else fail "a refusal line carries the key"; fi
 
 # ── the library, driven directly ──────────────────────────────────────────────────────────────────────────────
@@ -229,6 +232,7 @@ report(d.kept.length === 1 && d.dropped.length === 1 && d.requests[0].requestId 
 const err401 = async () => { try { await decideFilter(makeClient(config, async () => new Response("{}", { status: 401, headers: { "content-type": "application/json" } })), filter, [{ id: "a", text: "x" }], { task: "t" }); return null; } catch (e) { return e; } };
 const e = await err401();
 report(e && e.code === "provider" && e.exitStatus === 4 && e.detail.status === 401 && !e.describe().includes("${KEY}"), "errors: a 401 maps to the provider class, exit 4, no key in the line", e ? e.describe() : "none");
+report((await (async () => { try { await decideFilter(makeClient(config, async () => new Response("\\u001b[2Jx", { status: 400 })), filter, [{ id: "a", text: "x" }], { task: "t" }); return ""; } catch (e) { return e.describe(); } })()).match(/[\\u0000-\\u001f]/) === null, "errors: the described line holds no control character from the body");
 EOF
 set +e
 drive_out="$(node "${TESTDIR}/drive.mjs" 2>&1)"; drive_rc=$?
