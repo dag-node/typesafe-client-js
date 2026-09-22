@@ -1,8 +1,10 @@
-# Builds the single ESM artifact from a v* tag and attaches it to the release with its
-# sha256, so a consumer can vendor the file at a pinned tag and verify what it took.
+# Builds the ESM output from a v* tag and attaches it to the release as one tarball with
+# its sha256, so a consumer can vendor it at a pinned tag and verify what it took.
 #
 # dist/ is not committed (see .gitignore), so the release is built here rather than
 # uploaded from the checkout: the asset is the output of this workflow, from this tag.
+# `tsc` is the whole build, so the same command off the same tag reproduces the asset
+# anywhere -- which is what makes the checksum a claim a reader can check.
 #
 # Actions are pinned to a full-length commit SHA, which the organisation requires and
 # which is what makes a third-party action's code fixed -- a tag can be moved onto
@@ -34,8 +36,9 @@ jobs:
           set -euo pipefail
           npm ci --ignore-scripts
           npm run typecheck
-          npm test
           npm run build
+          # After the build: the suite exercises dist/, and skips itself when that is absent.
+          npm test
 
       - name: Check the tag against the package version
         run: |
@@ -52,7 +55,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          ( cd dist && sha256sum decide.mjs > decide.mjs.sha256 )
-          gh release create "${GITHUB_REF_NAME}" \
-              dist/decide.mjs dist/decide.mjs.sha256 \
+          asset="typesafe-client-js-${GITHUB_REF_NAME}.tar.gz"
+          # Reproducible: sorted entries, no owner, no gzip timestamp, and every mtime set
+          # to the tagged commit's own date, so the same tag builds to the same bytes and
+          # the checksum this step writes is a claim a reader can re-check. A fixed date would do the
+          # first of those and state something untrue; SOURCE_DATE_EPOCH is the convention
+          # for the second (reproducible-builds.org).
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct HEAD)"
+          tar --sort=name --owner=0 --group=0 --numeric-owner \
+              --mtime="@${SOURCE_DATE_EPOCH}" \
+              --pax-option=exthdr.name=%d/PaxHeaders/%f,delete=atime,delete=ctime \
+              -C dist -cf - . | gzip -n > "${asset}"
+          sha256sum "${asset}" > "${asset}.sha256"
+          gh release create "${GITHUB_REF_NAME}" "${asset}" "${asset}.sha256" \
               --verify-tag --generate-notes

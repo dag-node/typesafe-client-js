@@ -1,0 +1,33 @@
+# Type-checks and builds every push and pull request. The build is `tsc` alone, so this job is also
+# the check that the committed source compiles to the output a release attaches.
+#
+# Actions are pinned to a full-length commit SHA, which the organisation requires and which is what makes a
+# third-party action's code fixed -- a tag can be moved onto another commit by whoever owns the action.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions: read-all
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install, type-check, build, and run the offline suite
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts
+          npm run typecheck
+          npm run build
+          # After the build: the suite exercises dist/, and skips itself when that is absent.
+          npm test
