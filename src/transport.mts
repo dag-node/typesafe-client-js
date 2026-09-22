@@ -13,6 +13,9 @@
 // The projection drops a field it cannot fill and does not coerce one: a field failing its predicate is left out
 // rather than clamped, so `contractProblems` still reports it and a malformed answer cannot be repaired into a
 // valid-looking one.
+//
+// A redirect is not followed. The configuration pins the one origin the key and the listing go to; a 3xx from it
+// is returned as the provider's answer and refused on the status, so neither travels to the location it names.
 import { DecideError, ErrorCode } from "./errors.mjs";
 import type { TypeSafeConfig } from "./config.mjs";
 // Types only, erased on emit, so the shipped JavaScript does not import the SDK. The provider publishes its wire
@@ -25,7 +28,10 @@ const REQUEST_PATH = "/v1/systemone";
 const MAX_BODY_BYTES = 1 << 20;
 /** How much of a failing body reaches the error detail. */
 const MAX_SNIPPET_CHARS = 200;
-const MAX_MODEL_CHARS = 120;
+/** A model name reaches the summary line and the usage log, so it is admitted only in the shape config.mts accepts. */
+const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+/** `application/json`, with or without parameters; a longer subtype is not JSON. */
+const JSON_CONTENT_TYPE = /^application\/json\s*(?:;|$)/i;
 /** Retry backoff, and the ceiling on a provider-supplied Retry-After. */
 const BACKOFF_INITIAL_MS = 500;
 const BACKOFF_MAX_MS = 5_000;
@@ -228,7 +234,7 @@ function projectResult(
     }
     const model = own(raw, "model");
     const out: ProjectedResult = { usage, answers };
-    if (typeof model === "string" && model !== "") out.model = model.slice(0, MAX_MODEL_CHARS);
+    if (typeof model === "string" && MODEL_RE.test(model)) out.model = model;
     return out;
 }
 
@@ -266,6 +272,8 @@ export async function send(
     const body = JSON.stringify(payload);
     let attempt = 0;
     for (;;) {
+        // Checked before the attempt, so a cancellation already in force makes no request whatever fetch does with it.
+        if (signal.aborted) throw new DecideError(ErrorCode.deadline, "the invocation was cancelled", {}, { cause: signal.reason });
         const attemptSignal = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
         let response: Response;
         try {
@@ -278,6 +286,8 @@ export async function send(
                 },
                 body,
                 signal: attemptSignal,
+                // Node's fetch returns the 3xx itself under "manual", and Gate 1 refuses it.
+                redirect: "manual",
             });
         } catch (err: unknown) {
             // A caller abort is the invocation's total budget and is final; a per-attempt timeout or a transport
@@ -308,7 +318,7 @@ export async function send(
         }
         // Gate 2: the content type. Anything but JSON is refused with the body unread.
         const contentType = response.headers.get("content-type") ?? "";
-        if (!contentType.toLowerCase().startsWith("application/json")) {
+        if (!JSON_CONTENT_TYPE.test(contentType)) {
             await response.body?.cancel();
             throw contractError("the answer is not JSON", { contentType: contentType.slice(0, MAX_SNIPPET_CHARS) });
         }

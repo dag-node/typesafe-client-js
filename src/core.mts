@@ -224,6 +224,8 @@ async function runChunks<A>(
     const deadline = setTimeout(() => controller.abort(new Error(`total budget of ${LIMITS.totalBudgetMs}ms exceeded`)), LIMITS.totalBudgetMs);
     const onCallerAbort = (): void => controller.abort(run.signal?.reason);
     run.signal?.addEventListener("abort", onCallerAbort, { once: true });
+    // A signal already aborted on entry fires no event: the first send sees the cancellation instead.
+    if (run.signal?.aborted) onCallerAbort();
     const requests: RequestRecord[] = [];
     // Null-prototype: the keys are the provider's, so an accumulator with a prototype would let one of them reach it.
     const answers: Record<string, A> = Object.create(null) as Record<string, A>;

@@ -6,8 +6,9 @@
 # the class; the configuration file's refusals hold on the world bits, on a symlink, and on each value whose form
 # config.mts states; the request carries the file's own origin, key and model, and an environment variable of the
 # same name changes none of the three; the three stdin parsers keep a `path:line` id once, fall back to `L<n>` on a
-# repeat, refuse a record they cannot place and read a hostile line in linear time; and the answer contract rejects
-# each malformed body it is driven with. No case here opens a connection.
+# repeat, refuse a record they cannot place and read a hostile line in linear time; the answer contract rejects each
+# malformed body it is driven with; and each gate refuses the response built to pass it. No case here opens a
+# connection.
 #
 # Hermetic: fixtures in the suite's own temporary directory, removed on exit.
 set -euo pipefail
@@ -218,7 +219,7 @@ const config = readConfig("${conf}");
 report(config.threshold === 0.5 && config.uncertainBand[0] === 0.35 && config.uncertainBand[1] === 0.65 && config.timeoutMs === 15000, "defaults: a file omitting them yields the threshold, band and timeout from defaults.mts");
 const calls = [];
 const fetchImpl = async (url, init) => {
-  calls.push({ url, auth: init.headers.Authorization ?? init.headers.authorization, body: JSON.parse(init.body) });
+  calls.push({ url, auth: init.headers.Authorization ?? init.headers.authorization, body: JSON.parse(init.body), redirect: init.redirect });
   return new Response(JSON.stringify({ model: "jev-1.13.0", answers: { "s:1": { type: "noul", noul: 0.9 }, "s:2": { type: "noul", noul: 0.2 } }, usage: { input_tokens: 5, output_tokens: 0 } }), { status: 200, headers: { "content-type": "application/json", "x-typesafe-request-id": "req_unit" } });
 };
 const client = makeClient(config, fetchImpl);
@@ -227,12 +228,28 @@ const c = calls[0];
 report(c.url === "https://api.typesafe.ai/v1/systemone", "pinning: the request goes to the configured origin, not TYPESAFE_BASE_URL", c.url);
 report(c.auth === "Bearer ${KEY}", "pinning: the bearer is the file's key, not TYPESAFE_API_KEY");
 report(c.body.model === "jev-1.13.0", "pinning: the model is the file's default, not TYPESAFE_DEFAULT_MODEL", c.body.model);
+report(c.redirect === "manual", "pinning: a redirect is not followed, so the key and the listing go to the origin alone", String(c.redirect));
 report(Object.keys(c.body.questions).join() === "s:1,s:2" && c.body.questions["s:1"].type === "noul" && c.body.state.task === "t", "request: one noul per item keyed by id, the task in the state");
 report(d.kept.length === 1 && d.dropped.length === 1 && d.requests[0].requestId === "req_unit" && d.requests[0].inputTokens === 5, "decision: kept/dropped split, request id and usage reported", JSON.stringify(d));
 const err401 = async () => { try { await decideFilter(makeClient(config, async () => new Response("{}", { status: 401, headers: { "content-type": "application/json" } })), filter, [{ id: "a", text: "x" }], { task: "t" }); return null; } catch (e) { return e; } };
 const e = await err401();
 report(e && e.code === "provider" && e.exitStatus === 4 && e.detail.status === 401 && !e.describe().includes("${KEY}"), "errors: a 401 maps to the provider class, exit 4, no key in the line", e ? e.describe() : "none");
+// Everything the provider sends is untrusted: each of these answers is refused at its gate, with one fetch made.
+const refused = async (what, respond, code, needle) => {
+  let n = 0;
+  try { await decideFilter(makeClient(config, async () => { n++; return respond(); }), filter, [{ id: "a", text: "x" }], { task: "t" }); report(false, \`gate: \${what}\`, "accepted"); }
+  catch (e) { report(e.code === code && n === 1 && e.describe().includes(needle), \`gate: \${what} is refused as \${code}\`, \`\${e.describe()} after \${n} fetch(es)\`); }
+};
+const json = (body, headers = {}) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json", ...headers } });
+await refused("a 302 to another host", () => new Response("", { status: 302, headers: { location: "https://elsewhere.invalid/" } }), "provider", "302");
+await refused("a subtype that only starts with json", () => new Response("{}", { status: 200, headers: { "content-type": "application/jsonx" } }), "contract", "not JSON");
+await refused("a model name carrying a line break", () => json({ model: "jev\\n1", answers: { a: { type: "noul", noul: 0.5 } }, usage: { input_tokens: 1, output_tokens: 0 } }), "contract", "model");
+await refused("a body snippet carrying an escape sequence", () => new Response("\\u001b[31mnope\\u001b[0m\\nsecond line", { status: 400, headers: { "content-type": "text/plain" } }), "provider", "400");
 report((await (async () => { try { await decideFilter(makeClient(config, async () => new Response("\\u001b[2Jx", { status: 400 })), filter, [{ id: "a", text: "x" }], { task: "t" }); return ""; } catch (e) { return e.describe(); } })()).match(/[\\u0000-\\u001f]/) === null, "errors: the described line holds no control character from the body");
+const pre = new AbortController(); pre.abort(new Error("caller cancelled"));
+let fetched = 0;
+const cancelled = await (async () => { try { await decideFilter(makeClient(config, async () => { fetched++; return json({}); }), filter, [{ id: "a", text: "x" }], { task: "t" }, { signal: pre.signal }); return null; } catch (e) { return e; } })();
+report(cancelled && cancelled.code === "deadline" && fetched === 0, "deadline: a signal aborted before the call makes no request", cancelled ? cancelled.describe() : "none");
 EOF
 set +e
 drive_out="$(node "${TESTDIR}/drive.mjs" 2>&1)"; drive_rc=$?
