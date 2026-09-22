@@ -1,0 +1,58 @@
+# Builds the single ESM artifact from a v* tag and attaches it to the release with its
+# sha256, so a consumer can vendor the file at a pinned tag and verify what it took.
+#
+# dist/ is not committed (see .gitignore), so the release is built here rather than
+# uploaded from the checkout: the asset is the output of this workflow, from this tag.
+#
+# Actions are pinned to a full-length commit SHA, which the organisation requires and
+# which is what makes a third-party action's code fixed -- a tag can be moved onto
+# another commit by whoever owns the action.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+# Read-only by default; the one job that attaches an asset asks for contents: write.
+permissions: read-all
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install, check, and build
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts
+          npm run typecheck
+          npm test
+          npm run build
+
+      - name: Check the tag against the package version
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p 'require("./package.json").version')"
+          if [[ "${tag}" != "${pkg}" ]]; then
+              printf 'tag %s does not match package.json version %s\n' "${tag}" "${pkg}" >&2
+              exit 1
+          fi
+
+      - name: Create the release and attach the artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ( cd dist && sha256sum decide.mjs > decide.mjs.sha256 )
+          gh release create "${GITHUB_REF_NAME}" \
+              dist/decide.mjs dist/decide.mjs.sha256 \
+              --verify-tag --generate-notes

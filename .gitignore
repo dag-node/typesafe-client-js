@@ -1,0 +1,7 @@
+node_modules/
+# The build output is a release asset, produced by the release workflow from a
+# tag. A committed copy would be a second artifact of record with nothing
+# holding it to the source.
+dist/
+*.tsbuildinfo
+.idea/
