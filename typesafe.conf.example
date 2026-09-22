@@ -1,0 +1,32 @@
+# Example configuration for the decide command, named with
+# --config <file>. Copy it and set the key.
+#
+# It holds a credential, so the command refuses a file other
+# users can read or write. Two shapes satisfy that: 0600 when you
+# own the file and run the command yourself, or 0640 root:<group>
+# when a service account reads it.
+#
+# Each commented line below is the default the client uses when
+# the file leaves that key out. The form each value takes is in
+# README.md; what the model does with one is in the TypeSafe
+# documentation at https://docs.typesafe.ai.
+
+# The API key TypeSafe issued. Required.
+TYPESAFE_API_KEY=replace-with-your-key
+
+# The API origin (https, no path) and the host it resolves to.
+# The client sends the key only where the two agree.
+#TYPESAFE_BASE_URL=https://api.typesafe.ai
+#TYPESAFE_ENDPOINT_HOST=api.typesafe.ai
+
+# The versioned model that answers. An alias moves on a release.
+#TYPESAFE_MODEL=jev-1.13.0
+
+# The least P(true) that keeps an item, from 0 to 1.
+#TYPESAFE_THRESHOLD=0.5
+
+# The band of P(true) reported as uncertain, as low,high.
+#TYPESAFE_UNCERTAIN_BAND=0.35,0.65
+
+# One attempt, in whole milliseconds from 1000 to 120000.
+#TYPESAFE_TIMEOUT_MS=15000
