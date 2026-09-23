@@ -7,8 +7,11 @@
 # config.mts states; the request carries the file's own origin, key and model, and an environment variable of the
 # same name changes none of them; each stdin parser keeps a `path:line` id once, falls back to `L<n>` on a
 # repeat, refuse a record they cannot place and read a hostile line in linear time; the answer contract rejects each
-# malformed body it is driven with; and each gate refuses the response built to pass it. No case here opens a
-# connection.
+# malformed body it is driven with; each gate refuses the response built to pass it; and, against a provider stub
+# preloaded in place of fetch, the command runs end to end -- the kept lines verbatim, the summary, the usage
+# record, the exit status of each failure class -- with no environment, with a read-only file in a read-only
+# directory, and with nothing written unless --usage-log names a file.
+# No case here opens a connection.
 #
 # Hermetic: fixtures in the suite's own temporary directory, removed on exit.
 set -euo pipefail
@@ -145,6 +148,147 @@ run "$(printf 'a:1: safe\U000E0001hidden\n')" filter --task t --config "${conf}"
 run "$(printf 'bad \033[31mred\033[0m\r%s\n' "$(printf 'a%.0s' {1..400})")" filter --task t --format prose-check --config "${conf}"; expect_refusal "a refused line carrying an escape sequence" 2 input
 if [[ "$(wc -l <<<"${err}")" -eq 1 ]] && ! grep -q $'\033' "${TESTDIR}/err" && ! grep -q $'\r' "${TESTDIR}/err"; then pass "the stderr line holds no control character from the input"; else fail "stderr carries a control character: $(cat -A "${TESTDIR}/err" | head -c 200)"; fi
 if ! grep -qF "${KEY}" "${TESTDIR}/err"; then pass "no refusal line carries the key"; else fail "a refusal line carries the key"; fi
+mkdir "${TESTDIR}/dir.conf"
+run "x" filter --task t --config "${TESTDIR}/dir.conf"; expect_refusal "a directory" 3 configuration
+
+# ── the command end to end, against a provider stub ───────────────────────────────────────────────────────────
+# A module preloaded with `--import` replaces the global fetch before decide.mjs loads, so the whole command runs
+# -- arguments, file, stdin, request, answer, output, usage line, exit status -- with no connection opened. The
+# stub's mode rides in the import URL's query, so no case here sets an environment variable to steer it. In mode
+# `ok` an item's P(true) is the number after `p=` in its text where there is one, else 0.9 for a text carrying
+# `keep` and 0.1 otherwise.
+cat > "${TESTDIR}/stub.mjs" <<'EOF'
+const mode = new URL(import.meta.url).searchParams.get("mode") ?? "ok";
+const pOf = (text) => { const m = /p=([0-9.]+)/.exec(text); return m ? Number(m[1]) : text.includes("keep") ? 0.9 : 0.1; };
+globalThis.fetch = async (url, init) => {
+  if (mode === "401") return new Response("{}", { status: 401, headers: { "content-type": "application/json" } });
+  if (mode === "notjson") return new Response("<html>", { status: 200, headers: { "content-type": "text/html" } });
+  if (mode === "timeout") { const e = new Error("stub: no answer"); e.name = "TimeoutError"; throw e; }
+  const req = JSON.parse(init.body);
+  const answers = {};
+  for (const id of Object.keys(req.questions)) answers[id] = { type: "noul", noul: pOf(req.state.items.find((i) => i.id === id).text) };
+  const body = JSON.stringify({ model: req.model, answers, usage: { input_tokens: 7, output_tokens: 0 } });
+  return new Response(body, { status: 200, headers: { "content-type": "application/json", "x-typesafe-request-id": "req_stub" } });
+};
+EOF
+NODE="$(command -v node)"
+stub() { printf 'file://%s/stub.mjs?mode=%s' "${TESTDIR}" "${1:-ok}"; }
+# run_stub <mode> <stdin-text> <args...>: `run`, with the provider stubbed in the given mode.
+run_stub() {
+    local mode="$1" input="$2"; shift 2
+    set +e
+    out="$(printf '%s' "${input}" | "${NODE}" --import "$(stub "${mode}")" "${CLI}" "$@" 2>"${TESTDIR}/err")"
+    rc=$?
+    set -e
+    err="$(cat "${TESTDIR}/err")"
+}
+# The summary line carries the elapsed time, which two runs do not share; a comparison reads past it.
+untimed() { sed -E 's/, [0-9]+\.[0-9]s,/, T,/'; }
+listing="$(printf 'src/a.sh:1: keep this line\nsrc/b.sh:2: drop this one\nsrc/c.sh:3:   keep, with leading spaces kept\n')"
+
+run_stub ok "${listing}" filter --task t --config "${conf}"
+want="$(printf 'src/a.sh:1: keep this line\nsrc/c.sh:3:   keep, with leading spaces kept\ndecide: kept 2/3; dropped: src/b.sh:2; jev-1.13.0, 1 request(s), T, 7 tokens')"
+if [[ ${rc} -eq 0 && -z "${err}" && "$(untimed <<<"${out}")" == "${want}" ]]; then
+    pass "a result: the kept lines verbatim in listing order, one summary line naming the dropped ids, exit 0, stderr empty"
+else
+    fail "a result: rc=${rc} out='$(untimed <<<"${out}" | tr '\n' '|')' err='${err}'"
+fi
+baseline="$(untimed <<<"${out}")"
+
+# 1. The command reads no environment variable: with none at all, the run is the same run.
+set +e
+printf '%s' "${listing}" | env -i "${NODE}" --import "$(stub ok)" "${CLI}" filter --task t --config "${conf}" >"${TESTDIR}/bare.out" 2>"${TESTDIR}/err"; bare_rc=${PIPESTATUS[1]}
+set -e
+bare="$(untimed <"${TESTDIR}/bare.out")"
+if [[ ${bare_rc} -eq 0 && "${bare}" == "${baseline}" && ! -s "${TESTDIR}/err" ]]; then
+    pass "under env -i the run is identical: nothing the command needs comes from the environment"
+else
+    fail "under env -i: rc=${bare_rc} out='$(tr '\n' '|' <<<"${bare}")' err='$(cat "${TESTDIR}/err")'"
+fi
+
+# 2. Without --usage-log the command creates, changes and removes no file. Its working directory, its home and
+# the directory holding the file it reads are watched, and so is dist/, where a compile cache would land.
+watched="${TESTDIR}/watched"; mkdir -p "${watched}/home" "${watched}/cwd"
+cp "${conf}" "${watched}/typesafe.conf"; chmod 0600 "${watched}/typesafe.conf"
+before="$(find "${watched}" "${DIR}" | sort)"
+touch "${TESTDIR}/marker"
+set +e
+(cd "${watched}/cwd" && printf '%s' "${listing}" | env -i HOME="${watched}/home" "${NODE}" --import "$(stub ok)" "${CLI}" filter --task t --config "${watched}/typesafe.conf" >/dev/null 2>"${TESTDIR}/err"); nw_rc=$?
+set -e
+after="$(find "${watched}" "${DIR}" | sort)"
+touched="$(find "${watched}" "${DIR}" \( -newer "${TESTDIR}/marker" -o -cnewer "${TESTDIR}/marker" \) 2>/dev/null)"
+if [[ ${nw_rc} -eq 0 && "${before}" == "${after}" && -z "${touched}" ]]; then
+    pass "without --usage-log no file is created, changed or removed: the usage log is the command's only write"
+else
+    fail "without --usage-log: rc=${nw_rc} touched='$(tr '\n' ' ' <<<"${touched}")' listing-diff='$(diff <(echo "${before}") <(echo "${after}") | tr '\n' ' ')'"
+fi
+
+# 3. The deployment: a read-only file in a directory the caller cannot write. Nothing here opens it for anything
+# but reading, and nothing writes beside it.
+ro="${TESTDIR}/ro"; mkdir "${ro}"; cp "${conf}" "${ro}/typesafe.conf"; chmod 0400 "${ro}/typesafe.conf"; chmod 0500 "${ro}"
+run_stub ok "${listing}" filter --task t --config "${ro}/typesafe.conf"
+chmod 0700 "${ro}"
+if [[ ${rc} -eq 0 && "$(untimed <<<"${out}")" == "${baseline}" ]]; then pass "a 0400 file in a 0500 directory runs"; else fail "a 0400 file in a 0500 directory: rc=${rc} err='${err}'"; fi
+
+# 4. The usage log costs the line and not the result.
+run_stub ok "${listing}" filter --task t --config "${conf}" --usage-log "${TESTDIR}/absent/dir/usage.jsonl"
+if [[ ${rc} -eq 0 && -z "${err}" && "$(untimed <<<"${out}")" == "${baseline}" && ! -e "${TESTDIR}/absent" ]]; then
+    pass "--usage-log at an unwritable path: the result and exit 0, nothing on stderr"
+else
+    fail "--usage-log at an unwritable path: rc=${rc} err='${err}'"
+fi
+
+# The usage line: one JSON record per run, appended, counts and ids only -- no item text, no task, no key.
+ulog="${TESTDIR}/usage.jsonl"
+run_stub ok "${listing}" filter --task "a task nobody logs" --config "${conf}" --usage-log "${ulog}"
+run_stub ok "${listing}" filter --task "a task nobody logs" --config "${conf}" --usage-log "${ulog}"
+run_stub 401 "${listing}" filter --task "a task nobody logs" --config "${conf}" --usage-log "${ulog}"
+if [[ "$(wc -l <"${ulog}")" -eq 3 ]] && node -e '
+  const lines = require("fs").readFileSync(process.argv[1], "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  const [a, , c] = lines;
+  const want = ["ts", "version", "templateVersion", "template", "items", "kept", "cut", "invisible", "setAside", "format", "requests", "model", "inputTokens", "elapsedMs", "outcome", "requestIds"];
+  const ok = Object.keys(a).join() === want.join() && a.outcome === "ok" && a.items === 3 && a.kept === 2 && a.requests === 1 && a.inputTokens === 7 && a.requestIds[0] === "req_stub"
+    && c.outcome === "provider" && c.items === 3 && c.kept === undefined;
+  process.exit(ok ? 0 : 1);' "${ulog}" && ! grep -qE "keep this|nobody logs|${KEY}" "${ulog}"; then
+    pass "the usage log: one record per run appended, the documented fields, outcome ok or the failure class, no content"
+else
+    fail "the usage log: $(head -c 400 "${ulog}" | tr '\n' '|')"
+fi
+
+# --threshold overrides the file's value, which overrides the default; the band is the file's or the default.
+run_stub ok "a:1: p=0.68" filter --task t --config "${conf}"
+if [[ ${rc} -eq 0 && "${out}" == "a:1: p=0.68"* ]]; then pass "threshold: the default 0.5 keeps p=0.68"; else fail "threshold default: rc=${rc} out='${out}'"; fi
+write_conf 'TYPESAFE_THRESHOLD=0.7'
+run_stub ok "a:1: p=0.68" filter --task t --config "${conf}"
+if [[ ${rc} -eq 0 && "${out}" == "decide: kept 0/1; dropped: a:1;"* ]]; then pass "threshold: the file's 0.7 drops p=0.68"; else fail "threshold from file: rc=${rc} out='${out}'"; fi
+run_stub ok "a:1: p=0.68" filter --task t --config "${conf}" --threshold 0.55
+if [[ ${rc} -eq 0 && "${out}" == "a:1: p=0.68"* ]]; then pass "threshold: --threshold 0.55 overrides the file's 0.7"; else fail "threshold from --threshold: rc=${rc} out='${out}'"; fi
+run_stub ok "a:1: p=0.5" filter --task t --config "${conf}"
+if [[ ${rc} -eq 0 && "${out}" == *"(uncertain: a:1)"* ]]; then pass "the summary names an item inside the default uncertain band"; else fail "uncertain default: out='${out}'"; fi
+write_conf 'TYPESAFE_UNCERTAIN_BAND=0.1,0.2'
+run_stub ok "a:1: p=0.5" filter --task t --config "${conf}"
+if [[ ${rc} -eq 0 && "${out}" != *"uncertain"* ]]; then pass "the file's band moves what is reported uncertain"; else fail "uncertain from file: out='${out}'"; fi
+write_conf ''
+run_stub ok "$(printf 'Build started.\nx.cs(1,2): error CS1: keep\n  1 Error(s)\n')" filter --task t --format msbuild --config "${conf}"
+if [[ ${rc} -eq 0 && "${out}" == "keep"* && "${out}" == *"2 line(s) set aside by --format msbuild"* ]]; then pass "--format msbuild: the diagnostic's message is the line kept and the set-aside count is on the summary"; else fail "msbuild through the command: rc=${rc} out='$(tr '\n' '|' <<<"${out}")'"; fi
+
+# 5. The exit statuses are a contract a caller branches on. 0, 2 and 3 are held above; here 4, 5 and 6 through the
+# command, and the table itself at the library seam below.
+run_stub 401 "${listing}" filter --task t --config "${conf}"; expect_refusal "the provider's 401" 4 provider
+run_stub notjson "${listing}" filter --task t --config "${conf}"; expect_refusal "an answer that is not JSON" 5 contract
+run_stub timeout "${listing}" filter --task t --config "${conf}"; expect_refusal "no answer within the timeout, after the one retry" 6 deadline
+
+# 7. The locale does not reach the bytes: a minimal C locale and a UTF-8 one print the same result.
+intl="$(printf 'a:1: keep na\xc3\xafve \xe2\x80\x94 \xe2\x9c\x93 \xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d\nb:2: drop \xc3\xbcn\xc3\xafcode\n')"
+set +e
+in_c="$(printf '%s' "${intl}" | env LC_ALL=C LANG=C "${NODE}" --import "$(stub ok)" "${CLI}" filter --task t --config "${conf}" 2>/dev/null | untimed)"
+in_utf8="$(printf '%s' "${intl}" | env LC_ALL=C.UTF-8 LANG=C.UTF-8 "${NODE}" --import "$(stub ok)" "${CLI}" filter --task t --config "${conf}" 2>/dev/null | untimed)"
+set -e
+if [[ -n "${in_c}" && "${in_c}" == "${in_utf8}" && "${in_c}" == "a:1: keep na"*"$(printf '\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d')"* ]]; then
+    pass "LC_ALL=C and a UTF-8 locale print the same bytes for a non-ASCII listing"
+else
+    fail "locale: C='$(tr '\n' '|' <<<"${in_c}")' UTF-8='$(tr '\n' '|' <<<"${in_utf8}")'"
+fi
 
 # ── the library, driven directly ──────────────────────────────────────────────────────────────────────────────
 # The parsers, the contract and the request's pinning are asserted from node, where the fetch the transport makes is
@@ -154,6 +298,7 @@ import { parseLines, parseProseCheck, parseMsbuild, parse } from "${DIR}/parsers
 import { contractProblems, makeClient, decideFilter, LIMITS, chunkItems, normalizeItems, isItemId } from "${DIR}/core.mjs";
 import { filter } from "${DIR}/templates.mjs";
 import { readConfig } from "${DIR}/config.mjs";
+import { EXIT_STATUS } from "${DIR}/errors.mjs";
 const report = (cond, what, why = "") => console.log(cond ? \`ok \${what}\` : \`FAIL \${what}: \${why}\`);
 const lines = parseLines("src/a.sh:12: foo()\\n\\nplain line\\nsrc/b.sh:3:bar\\n").items;
 report(lines.length === 3 && lines[0].id === "src/a.sh:12" && lines[1].id === "L2" && lines[2].id === "src/b.sh:3" && lines[0].text === "src/a.sh:12: foo()", "lines: path:line ids, L<n> fallback, blank lines skipped", JSON.stringify(lines));
@@ -256,7 +401,7 @@ const config = readConfig("${conf}");
 report(config.threshold === 0.5 && config.uncertainBand[0] === 0.35 && config.uncertainBand[1] === 0.65 && config.timeoutMs === 15000, "defaults: a file omitting them yields the threshold, band and timeout from defaults.mts");
 const calls = [];
 const fetchImpl = async (url, init) => {
-  calls.push({ url, auth: init.headers.Authorization ?? init.headers.authorization, body: JSON.parse(init.body), redirect: init.redirect });
+  calls.push({ url, auth: init.headers.Authorization ?? init.headers.authorization, body: JSON.parse(init.body), raw: init.body, redirect: init.redirect });
   return new Response(JSON.stringify({ model: "jev-1.13.0", answers: { "s:1": { type: "noul", noul: 0.9 }, "s:2": { type: "noul", noul: 0.2 } }, usage: { input_tokens: 5, output_tokens: 0 } }), { status: 200, headers: { "content-type": "application/json", "x-typesafe-request-id": "req_unit" } });
 };
 const client = makeClient(config, fetchImpl);
@@ -267,6 +412,9 @@ report(c.auth === "Bearer ${KEY}", "pinning: the bearer is the file's key, not T
 report(c.body.model === "jev-1.13.0", "pinning: the model is the file's default, not TYPESAFE_DEFAULT_MODEL", c.body.model);
 report(c.redirect === "manual", "pinning: a redirect is not followed, so the key and the listing go to the origin alone", String(c.redirect));
 report(Object.keys(c.body.questions).join() === "s:1,s:2" && c.body.questions["s:1"].type === "noul" && c.body.state.task === "t", "request: one noul per item keyed by id, the task in the state");
+// The body is the documented payload and nothing beside it: not the key, not the file's other values.
+report(Object.keys(c.body).sort().join() === "model,questions,state" && Object.keys(c.body.state).sort().join() === "items,note,task" && !c.raw.includes("${KEY}") && !c.raw.includes("api.typesafe.ai"),
+  "request: the body holds model, state and questions alone, and neither the key nor the origin", Object.keys(c.body).join());
 report(d.kept.length === 1 && d.dropped.length === 1 && d.requests[0].requestId === "req_unit" && d.requests[0].inputTokens === 5, "decision: kept/dropped split, request id and usage reported", JSON.stringify(d));
 const err401 = async () => { try { await decideFilter(makeClient(config, async () => new Response("{}", { status: 401, headers: { "content-type": "application/json" } })), filter, [{ id: "a", text: "x" }], { task: "t" }); return null; } catch (e) { return e; } };
 const e = await err401();
@@ -287,6 +435,56 @@ const pre = new AbortController(); pre.abort(new Error("caller cancelled"));
 let fetched = 0;
 const cancelled = await (async () => { try { await decideFilter(makeClient(config, async () => { fetched++; return json({}); }), filter, [{ id: "a", text: "x" }], { task: "t" }, { signal: pre.signal }); return null; } catch (e) { return e; } })();
 report(cancelled && cancelled.code === "deadline" && fetched === 0, "deadline: a signal aborted before the call makes no request", cancelled ? cancelled.describe() : "none");
+// A caller abort while the request is in flight ends it as a deadline, whatever the provider was about to say.
+const mid = new AbortController();
+const hang = (url, init) => new Promise((_, reject) => init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true }));
+setTimeout(() => mid.abort(new Error("caller cancelled")), 20);
+const midErr = await (async () => { try { await decideFilter(makeClient(config, hang), filter, [{ id: "a", text: "x" }], { task: "t" }, { signal: mid.signal }); return null; } catch (e) { return e; } })();
+report(midErr && midErr.code === "deadline" && midErr.exitStatus === 6, "deadline: a caller abort in flight ends the send as deadline, exit 6", midErr ? midErr.describe() : "none");
+
+// The exit statuses are a contract: a caller branches on them, so a renumbering is a breaking change.
+report(JSON.stringify(EXIT_STATUS) === JSON.stringify({ input: 2, configuration: 3, provider: 4, contract: 5, deadline: 6 }), "exit statuses: input 2, configuration 3, provider 4, contract 5, deadline 6", JSON.stringify(EXIT_STATUS));
+
+// A fetch that answers every id the request asks for, so a case can drive any listing through the loop.
+const answerAll = (extra = {}) => async (url, init) => {
+  const req = JSON.parse(init.body);
+  const answers = Object.fromEntries(Object.keys(req.questions).map((id) => [id, { type: "noul", noul: 0.9 }]));
+  return json({ model: "m", answers: { ...answers, ...extra }, usage: { input_tokens: 1, output_tokens: 0 } });
+};
+// Retries: one more attempt after 408, 429 or 5xx, honouring a small Retry-After; a 4xx is the answer, made once.
+let attempts = 0;
+const flaky = async (url, init) => (attempts++ === 0 ? new Response("busy", { status: 503, headers: { "retry-after-ms": "0" } }) : answerAll()(url, init));
+const recovered = await decideFilter(makeClient(config, flaky), filter, [{ id: "a", text: "x" }], { task: "t" });
+report(attempts === 2 && recovered.kept.length === 1 && recovered.requests[0].retries === 1, "retry: a 503 is retried once and the retry is recorded on the request", \`\${attempts} attempt(s)\`);
+attempts = 0;
+const down = await (async () => { try { await decideFilter(makeClient(config, async () => { attempts++; return new Response("", { status: 503, headers: { "retry-after-ms": "0" } }); }), filter, [{ id: "a", text: "x" }], { task: "t" }); return null; } catch (e) { return e; } })();
+report(attempts === 2 && down && down.code === "provider" && down.detail.status === 503, "retry: a second 503 is the provider's answer, after exactly two attempts", down ? down.describe() : "none");
+attempts = 0;
+const denied = await (async () => { try { await decideFilter(makeClient(config, async () => { attempts++; return new Response("", { status: 400 }); }), filter, [{ id: "a", text: "x" }], { task: "t" }); return null; } catch (e) { return e; } })();
+report(attempts === 1 && denied && denied.code === "provider", "retry: a 400 is not retried", \`\${attempts} attempt(s)\`);
+
+// The body cap: a declared length past it is refused with the body unread; a stream past it is refused and cancelled.
+// A high-water mark of 0 keeps the stream from pulling ahead on its own, so a pull here is a read by the transport.
+let bodyRead = false, cancelledStream = false;
+const declared = new ReadableStream({ pull(c) { bodyRead = true; c.enqueue(new Uint8Array(1024)); }, cancel() { cancelledStream = true; } }, { highWaterMark: 0 });
+await refused("a body declaring 2 MB", () => new Response(declared, { status: 200, headers: { "content-type": "application/json", "content-length": "2000000" } }), "contract", "body cap");
+report(!bodyRead && cancelledStream, "body cap: the declared length is refused before a byte of the body is read, and the stream is cancelled");
+let pulls = 0; cancelledStream = false;
+const endless = new ReadableStream({ pull(c) { pulls++; c.enqueue(new Uint8Array(65536)); }, cancel() { cancelledStream = true; } }, { highWaterMark: 0 });
+await refused("a body streaming past 1 MiB", () => new Response(endless, { status: 200, headers: { "content-type": "application/json" } }), "contract", "body cap");
+report(pulls === 17 && cancelledStream, "body cap: reading stops at the first 64 KiB chunk past the cap and the stream is cancelled", \`\${pulls} pull(s)\`);
+
+// The projection: a key aimed at the prototype and an answer for an id this process did not ask for both vanish.
+const hostile = '{"model":"m","answers":{"a":{"type":"noul","noul":0.9,"__proto__":{"hit":1}},"__proto__":{"polluted":1},"constructor":{"prototype":{"polluted":1}},"zzz":{"type":"noul","noul":0.9}},"usage":{"input_tokens":1,"output_tokens":0}}';
+const projected = await decideFilter(makeClient(config, async () => new Response(hostile, { status: 200, headers: { "content-type": "application/json" } })), filter, [{ id: "a", text: "x" }], { task: "t" });
+report(projected.kept.length === 1 && ({}).polluted === undefined && ({}).hit === undefined && Object.prototype.polluted === undefined && projected.kept[0].p === 0.9,
+  "projection: __proto__ and constructor keys and an unasked id are dropped, nothing reaches a prototype", JSON.stringify(projected.kept));
+
+// Chunking through the loop: a listing past one request's size is split, and every item's answer comes back.
+const seventy = Array.from({ length: 70 }, (_, i) => ({ id: \`c\${i}\`, text: "t" }));
+const sizes = [];
+const merged = await decideFilter(makeClient(config, async (url, init) => { sizes.push(Object.keys(JSON.parse(init.body).questions).length); return answerAll()(url, init); }), filter, seventy, { task: "t" });
+report(sizes.join("/") === "32/32/6" && merged.requests.length === 3 && merged.kept.length === 70 && merged.total === 70, "chunking: 70 items go as 32/32/6 and every answer is merged into one decision", \`\${sizes.join("/")}, \${merged.kept.length} kept\`);
 EOF
 set +e
 drive_out="$(node "${TESTDIR}/drive.mjs" 2>&1)"; drive_rc=$?
