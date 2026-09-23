@@ -152,11 +152,14 @@ export function parseMsbuild(text: string): Parsed {
  * undecodable byte to U+FFFD rather than failing, so the replacement character is counted here as the evidence it
  * is. Tab, newline and carriage return are text.
  */
+/** How much of the input the control-character check samples: its first 64 KiB. */
+const TEXT_SAMPLE_CHARS = 65_536;
+
 export function assertTextual(text: string): void {
     if (text.length > LIMITS.maxInputChars) {
         throw inputError(`the input is ${text.length} characters; the bound is ${LIMITS.maxInputChars}. Narrow the listing at its source`, { chars: text.length });
     }
-    const sample = text.slice(0, 65_536);
+    const sample = text.slice(0, TEXT_SAMPLE_CHARS);
     if (sample.includes("\u0000")) throw inputError("the input holds a NUL byte, so it is not a text listing");
     let suspectCount = 0;
     for (const character of sample) {

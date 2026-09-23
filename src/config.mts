@@ -38,6 +38,8 @@ const KEY_MIN_CHARS = 8;
 const KEY_MAX_CHARS = 512;
 const HOSTNAME_MAX_CHARS = 253;
 const URL_MAX_CHARS = 512;
+/** The longest value a refusal quotes before cutting it. */
+const DISPLAY_VALUE_MAX_CHARS = 60;
 const MIN_TIMEOUT_MS = 1_000;
 const MAX_TIMEOUT_MS = 120_000;
 
@@ -94,7 +96,7 @@ export function parseKeyValue(text: string): ReadonlyMap<string, string> {
 /** The value as a message shows it: one line, cut, so a pasted blob does not become the error. */
 const toDisplayValue = (value: string): string => {
     const singleLine = value.replace(/\s+/g, " ").trim();
-    return singleLine.length <= 60 ? singleLine : `${singleLine.slice(0, 60)}...`;
+    return singleLine.length <= DISPLAY_VALUE_MAX_CHARS ? singleLine : `${singleLine.slice(0, DISPLAY_VALUE_MAX_CHARS)}...`;
 };
 
 /** The file's setting for `settingName`, or undefined where the file leaves it to the default. */

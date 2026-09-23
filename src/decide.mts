@@ -34,6 +34,9 @@ import { FORMATS, parse, type Format } from "./parsers.mjs";
 import { filter, MAX_TASK_CHARS, TEMPLATE_VERSION } from "./templates.mjs";
 import { isProbability } from "./validation.mjs";
 
+/** How much of stdin one read takes. */
+const STDIN_READ_CHUNK_BYTES = 64 * 1024;
+
 interface Args {
     readonly template: string;
     readonly task: string;
@@ -107,7 +110,7 @@ function parseArgs(argv: readonly string[]): Args {
  */
 function readStdin(): string {
     const maxBytes = LIMITS.maxInputChars;
-    const readBuffer = Buffer.alloc(64 * 1024);
+    const readBuffer = Buffer.alloc(STDIN_READ_CHUNK_BYTES);
     const chunks: Buffer[] = [];
     let totalBytes = 0;
     for (;;) {
@@ -125,17 +128,39 @@ function readStdin(): string {
     return Buffer.concat(chunks, totalBytes).toString("utf8");
 }
 
+/** What the requests of one decision add up to: the distinct models, comma-joined, and the summed counts. */
+interface RequestTotals {
+    readonly models: string;
+    readonly inputTokens: number;
+    readonly elapsedMs: number;
+}
+
+function requestTotals(requests: readonly RequestRecord[]): RequestTotals {
+    return {
+        models: [...new Set(requests.map((request) => request.model))].join(","),
+        inputTokens: requests.reduce((total, request) => total + request.inputTokens, 0),
+        elapsedMs: requests.reduce((total, request) => total + request.elapsedMs, 0),
+    };
+}
+
 function formatSummaryLine(decision: Decision<NoulRow>, setAsideCount: number, format: Format): string {
-    const inputTokens = decision.requests.reduce((total: number, request: RequestRecord) => total + request.inputTokens, 0);
-    const elapsedMs = decision.requests.reduce((total: number, request: RequestRecord) => total + request.elapsedMs, 0);
-    const models = [...new Set(decision.requests.map((request) => request.model))].join(",");
+    const { models, inputTokens, elapsedMs } = requestTotals(decision.requests);
     const uncertainPart = decision.uncertain.length === 0 ? "" : ` (uncertain: ${decision.uncertain.map((row) => row.id).join(" ")})`;
     const droppedPart = decision.dropped.length === 0 ? "none" : decision.dropped.map((row) => row.id).join(" ");
     // A cut item and a set-aside line are evidence the model did not see, so the summary names each count.
-    const boundedPart = [decision.cut === 0 ? "" : `${decision.cut} item(s) cut at ${LIMITS.maxItemChars} chars`, setAsideCount === 0 ? "" : `${setAsideCount} line(s) set aside by --format ${format}`, decision.invisible === 0 ? "" : `${decision.invisible} item(s) carry invisible formatting`]
+    const boundedPart = [
+        decision.cut === 0 ? "" : `${decision.cut} item(s) cut at ${LIMITS.maxItemChars} chars`,
+        setAsideCount === 0 ? "" : `${setAsideCount} line(s) set aside by --format ${format}`,
+        decision.invisible === 0 ? "" : `${decision.invisible} item(s) carry invisible formatting`,
+    ]
         .filter((part) => part !== "")
         .join(", ");
-    return `decide: kept ${decision.kept.length}/${decision.total}${uncertainPart}; dropped: ${droppedPart}${boundedPart === "" ? "" : `; ${boundedPart}`}; ${models}, ${decision.requests.length} request(s), ${(elapsedMs / 1000).toFixed(1)}s, ${inputTokens} tokens`;
+    return [
+        `decide: kept ${decision.kept.length}/${decision.total}${uncertainPart}`,
+        `dropped: ${droppedPart}`,
+        ...(boundedPart === "" ? [] : [boundedPart]),
+        `${models}, ${decision.requests.length} request(s), ${(elapsedMs / 1000).toFixed(1)}s, ${inputTokens} tokens`,
+    ].join("; ");
 }
 
 function appendUsageLine(usageLogPath: string | undefined, fields: Record<string, string | number | null | readonly string[]>): void {
@@ -198,6 +223,7 @@ async function main(argv: readonly string[]): Promise<number> {
     const textById = new Map(items.map((item) => [item.id, item.text]));
     for (const row of decision.kept) process.stdout.write(`${textById.get(row.id) ?? row.id}\n`);
     process.stdout.write(`${formatSummaryLine(decision, setAside, args.format)}\n`);
+    const { models, inputTokens } = requestTotals(decision.requests);
     appendUsageLine(args.usageLogPath, {
         template: "filter",
         items: decision.total,
@@ -207,8 +233,8 @@ async function main(argv: readonly string[]): Promise<number> {
         setAside,
         format: args.format,
         requests: decision.requests.length,
-        model: [...new Set(decision.requests.map((request) => request.model))].join(","),
-        inputTokens: decision.requests.reduce((total: number, request) => total + request.inputTokens, 0),
+        model: models,
+        inputTokens,
         elapsedMs: Date.now() - startedAt,
         outcome: "ok",
         requestIds: decision.requests.map((request) => request.requestId ?? "-"),

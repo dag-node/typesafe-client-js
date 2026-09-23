@@ -102,6 +102,9 @@ const providerError = (message: string, detail: Record<string, string | number>)
     new DecideError(ErrorCode.provider, message, detail);
 const contractError = (message: string, detail: Record<string, string | number> = {}): DecideError =>
     new DecideError(ErrorCode.contract, message, detail);
+/** The invocation's total budget ran out or the caller aborted it; final, never retried. */
+const cancelledError = (cause: unknown): DecideError =>
+    new DecideError(ErrorCode.deadline, "the invocation was cancelled", {}, { cause });
 const errorNameOf = (error: unknown): string => (error instanceof Error ? error.name : "unknown");
 
 /** Pins the target and credential for every send; `fetchFunction` is the unit test's injection point. */
@@ -273,7 +276,7 @@ export async function send(
     for (;;) {
         // Checked before the attempt, so a cancellation already in force does not make a request, whatever
         // fetch does with it.
-        if (signal.aborted) throw new DecideError(ErrorCode.deadline, "the invocation was cancelled", {}, { cause: signal.reason });
+        if (signal.aborted) throw cancelledError(signal.reason);
         const attemptSignal = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
         let response: Response;
         try {
@@ -292,9 +295,7 @@ export async function send(
         } catch (error: unknown) {
             // A caller abort is the invocation's total budget and is final; a per-attempt timeout or a transport
             // fault may retry.
-            if (signal.aborted) {
-                throw new DecideError(ErrorCode.deadline, "the invocation was cancelled", {}, { cause: error });
-            }
+            if (signal.aborted) throw cancelledError(error);
             if (attempt >= maxRetries) {
                 if (errorNameOf(error) === "TimeoutError") {
                     throw new DecideError(ErrorCode.deadline, `no answer within ${timeoutMs}ms per attempt`, { timeoutMs }, { cause: error });
