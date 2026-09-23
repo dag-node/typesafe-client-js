@@ -7,6 +7,13 @@ MIT licensed.
 
 Source, issues and releases: https://github.com/dag-node/typesafe-client-js
 
+## [0.1.1] — 2026-09-23
+
+### Changed
+
+- **Release tarball** now includes the MIT `LICENSE` and `CHANGELOG.md` next to
+  the modules.
+
 ## [0.1.0] — 2026-09-23
 
 First public release.
