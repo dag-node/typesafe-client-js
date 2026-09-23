@@ -32,14 +32,18 @@ import { DecideError, inputError, configurationError, oneLine } from "./errors.m
 import { USAGE, VERSION } from "./help.mjs";
 import { FORMATS, parse, type Format } from "./parsers.mjs";
 import { filter, MAX_TASK_CHARS, TEMPLATE_VERSION } from "./templates.mjs";
+import { isProbability } from "./validation.mjs";
+
+/** How much of stdin one read takes. */
+const STDIN_READ_CHUNK_BYTES = 64 * 1024;
 
 interface Args {
     readonly template: string;
     readonly task: string;
     readonly format: Format;
     readonly threshold: number | undefined;
-    readonly config: string | undefined;
-    readonly usageLog: string | undefined;
+    readonly configPath: string | undefined;
+    readonly usageLogPath: string | undefined;
     readonly help: boolean;
     readonly version: boolean;
 }
@@ -49,17 +53,17 @@ function parseArgs(argv: readonly string[]): Args {
     let task = "";
     let format: Format = "lines";
     let threshold: number | undefined;
-    let config: string | undefined;
-    let usageLog: string | undefined;
+    let configPath: string | undefined;
+    let usageLogPath: string | undefined;
     let help = false;
     let version = false;
-    const next = (flag: string, i: number): string => {
-        const v = argv[i + 1];
-        if (v === undefined) throw inputError(`${flag} needs a value`);
-        return v;
+    const readOptionValue = (flag: string, flagIndex: number): string => {
+        const value = argv[flagIndex + 1];
+        if (value === undefined) throw inputError(`${flag} needs a value`);
+        return value;
     };
-    for (let i = 0; i < argv.length; i++) {
-        const arg = argv[i] as string;
+    for (let argIndex = 0; argIndex < argv.length; argIndex++) {
+        const arg = argv[argIndex] as string;
         switch (arg) {
             case "--help":
             case "-h":
@@ -70,25 +74,25 @@ function parseArgs(argv: readonly string[]): Args {
                 version = true;
                 break;
             case "--task":
-                task = next(arg, i++);
+                task = readOptionValue(arg, argIndex++);
                 break;
             case "--format": {
-                const v = next(arg, i++);
-                if (!(FORMATS as readonly string[]).includes(v)) throw inputError(`--format must be one of ${FORMATS.join(", ")}, got '${v}'`);
-                format = v as Format;
+                const formatName = readOptionValue(arg, argIndex++);
+                if (!(FORMATS as readonly string[]).includes(formatName)) throw inputError(`--format must be one of ${FORMATS.join(", ")}, got '${formatName}'`);
+                format = formatName as Format;
                 break;
             }
             case "--threshold": {
-                const v = Number(next(arg, i++));
-                if (!Number.isFinite(v) || v < 0 || v > 1) throw inputError("--threshold must be a number between 0 and 1");
-                threshold = v;
+                const thresholdValue = Number(readOptionValue(arg, argIndex++));
+                if (!isProbability(thresholdValue)) throw inputError("--threshold must be a number between 0 and 1");
+                threshold = thresholdValue;
                 break;
             }
             case "--config":
-                config = next(arg, i++);
+                configPath = readOptionValue(arg, argIndex++);
                 break;
             case "--usage-log":
-                usageLog = next(arg, i++);
+                usageLogPath = readOptionValue(arg, argIndex++);
                 break;
             default:
                 if (arg.startsWith("-")) throw inputError(`unknown option '${arg}'`);
@@ -96,7 +100,7 @@ function parseArgs(argv: readonly string[]): Args {
                 template = arg;
         }
     }
-    return { template, task, format, threshold, config, usageLog, help, version };
+    return { template, task, format, threshold, configPath, usageLogPath, help, version };
 }
 
 /**
@@ -105,42 +109,64 @@ function parseArgs(argv: readonly string[]): Args {
  * applies it to characters again.
  */
 function readStdin(): string {
-    const cap = LIMITS.maxInputChars;
-    const chunk = Buffer.alloc(64 * 1024);
+    const maxBytes = LIMITS.maxInputChars;
+    const readBuffer = Buffer.alloc(STDIN_READ_CHUNK_BYTES);
     const chunks: Buffer[] = [];
-    let length = 0;
+    let totalBytes = 0;
     for (;;) {
-        let n: number;
+        let bytesRead: number;
         try {
-            n = readSync(0, chunk, 0, chunk.length, null);
-        } catch (err) {
-            throw inputError(`stdin is not readable (${err instanceof Error ? err.message : String(err)}) -- pipe a listing in`);
+            bytesRead = readSync(0, readBuffer, 0, readBuffer.length, null);
+        } catch (error) {
+            throw inputError(`stdin is not readable (${error instanceof Error ? error.message : String(error)}) -- pipe a listing in`);
         }
-        if (n === 0) break;
-        length += n;
-        if (length > cap) throw inputError(`the input is over ${cap} bytes. Narrow the listing at its source`, { bytes: length });
-        chunks.push(Buffer.from(chunk.subarray(0, n)));
+        if (bytesRead === 0) break;
+        totalBytes += bytesRead;
+        if (totalBytes > maxBytes) throw inputError(`the input is over ${maxBytes} bytes. Narrow the listing at its source`, { bytes: totalBytes });
+        chunks.push(Buffer.from(readBuffer.subarray(0, bytesRead)));
     }
-    return Buffer.concat(chunks, length).toString("utf8");
+    return Buffer.concat(chunks, totalBytes).toString("utf8");
 }
 
-function summary(decision: Decision<NoulRow>, setAside: number, format: Format): string {
-    const tokens = decision.requests.reduce((n: number, r: RequestRecord) => n + r.inputTokens, 0);
-    const elapsed = decision.requests.reduce((n: number, r: RequestRecord) => n + r.elapsedMs, 0);
-    const models = [...new Set(decision.requests.map((r) => r.model))].join(",");
-    const uncertain = decision.uncertain.length === 0 ? "" : ` (uncertain: ${decision.uncertain.map((r) => r.id).join(" ")})`;
-    const dropped = decision.dropped.length === 0 ? "none" : decision.dropped.map((r) => r.id).join(" ");
+/** What the requests of one decision add up to: the distinct models, comma-joined, and the summed counts. */
+interface RequestTotals {
+    readonly models: string;
+    readonly inputTokens: number;
+    readonly elapsedMs: number;
+}
+
+function requestTotals(requests: readonly RequestRecord[]): RequestTotals {
+    return {
+        models: [...new Set(requests.map((request) => request.model))].join(","),
+        inputTokens: requests.reduce((total, request) => total + request.inputTokens, 0),
+        elapsedMs: requests.reduce((total, request) => total + request.elapsedMs, 0),
+    };
+}
+
+function formatSummaryLine(decision: Decision<NoulRow>, setAsideCount: number, format: Format): string {
+    const { models, inputTokens, elapsedMs } = requestTotals(decision.requests);
+    const uncertainPart = decision.uncertain.length === 0 ? "" : ` (uncertain: ${decision.uncertain.map((row) => row.id).join(" ")})`;
+    const droppedPart = decision.dropped.length === 0 ? "none" : decision.dropped.map((row) => row.id).join(" ");
     // A cut item and a set-aside line are evidence the model did not see, so the summary names each count.
-    const bounded = [decision.cut === 0 ? "" : `${decision.cut} item(s) cut at ${LIMITS.maxItemChars} chars`, setAside === 0 ? "" : `${setAside} line(s) set aside by --format ${format}`, decision.invisible === 0 ? "" : `${decision.invisible} item(s) carry invisible formatting`]
+    const boundedPart = [
+        decision.cut === 0 ? "" : `${decision.cut} item(s) cut at ${LIMITS.maxItemChars} chars`,
+        setAsideCount === 0 ? "" : `${setAsideCount} line(s) set aside by --format ${format}`,
+        decision.invisible === 0 ? "" : `${decision.invisible} item(s) carry invisible formatting`,
+    ]
         .filter((part) => part !== "")
         .join(", ");
-    return `decide: kept ${decision.kept.length}/${decision.total}${uncertain}; dropped: ${dropped}${bounded === "" ? "" : `; ${bounded}`}; ${models}, ${decision.requests.length} request(s), ${(elapsed / 1000).toFixed(1)}s, ${tokens} tokens`;
+    return [
+        `decide: kept ${decision.kept.length}/${decision.total}${uncertainPart}`,
+        `dropped: ${droppedPart}`,
+        ...(boundedPart === "" ? [] : [boundedPart]),
+        `${models}, ${decision.requests.length} request(s), ${(elapsedMs / 1000).toFixed(1)}s, ${inputTokens} tokens`,
+    ].join("; ");
 }
 
-function usageLine(path: string | undefined, fields: Record<string, string | number | null | readonly string[]>): void {
-    if (path === undefined || path === "") return;
+function appendUsageLine(usageLogPath: string | undefined, fields: Record<string, string | number | null | readonly string[]>): void {
+    if (usageLogPath === undefined || usageLogPath === "") return;
     try {
-        appendFileSync(path, `${JSON.stringify({ ts: new Date().toISOString(), version: VERSION, templateVersion: TEMPLATE_VERSION, ...fields })}\n`);
+        appendFileSync(usageLogPath, `${JSON.stringify({ ts: new Date().toISOString(), version: VERSION, templateVersion: TEMPLATE_VERSION, ...fields })}\n`);
     } catch {
         // The usage log is cost accounting. A path the command fails to open costs the line and leaves the result.
     }
@@ -164,10 +190,10 @@ async function main(argv: readonly string[]): Promise<number> {
     if (args.task.trim() === "") throw inputError("filter needs --task \"<one sentence>\"");
     if (args.task.length > MAX_TASK_CHARS) throw inputError(`--task is ${args.task.length} chars; the bound is ${MAX_TASK_CHARS}`);
 
-    if (args.config === undefined || args.config === "") {
+    if (args.configPath === undefined || args.configPath === "") {
         throw configurationError("--config <file> is required -- it names the file holding the API key; run --help for the options");
     }
-    const config = readConfig(args.config);
+    const config = readConfig(args.configPath);
     const { items, setAside } = parse(args.format, readStdin());
     if (items.length === 0) throw inputError("the listing on stdin is empty");
     if (items.length > LIMITS.maxItems) {
@@ -178,7 +204,7 @@ async function main(argv: readonly string[]): Promise<number> {
     }
 
     const client = makeClient(config);
-    const started = Date.now();
+    const startedAt = Date.now();
     let decision: Decision<NoulRow>;
     try {
         // `--threshold` is the per-call override of the file's value, which is itself the default's override.
@@ -189,15 +215,16 @@ async function main(argv: readonly string[]): Promise<number> {
             { task: args.task, threshold: args.threshold ?? config.threshold, uncertainBand: config.uncertainBand },
             { timeoutMs: config.timeoutMs },
         );
-    } catch (err) {
-        const failure = err instanceof DecideError ? err : null;
-        usageLine(args.usageLog, { template: "filter", items: items.length, outcome: failure ? failure.code : "unexpected", elapsedMs: Date.now() - started });
-        throw err;
+    } catch (error) {
+        const decideError = error instanceof DecideError ? error : null;
+        appendUsageLine(args.usageLogPath, { template: "filter", items: items.length, outcome: decideError ? decideError.code : "unexpected", elapsedMs: Date.now() - startedAt });
+        throw error;
     }
-    const byId = new Map(items.map((i) => [i.id, i.text]));
-    for (const row of decision.kept) process.stdout.write(`${byId.get(row.id) ?? row.id}\n`);
-    process.stdout.write(`${summary(decision, setAside, args.format)}\n`);
-    usageLine(args.usageLog, {
+    const textById = new Map(items.map((item) => [item.id, item.text]));
+    for (const row of decision.kept) process.stdout.write(`${textById.get(row.id) ?? row.id}\n`);
+    process.stdout.write(`${formatSummaryLine(decision, setAside, args.format)}\n`);
+    const { models, inputTokens } = requestTotals(decision.requests);
+    appendUsageLine(args.usageLogPath, {
         template: "filter",
         items: decision.total,
         kept: decision.kept.length,
@@ -206,11 +233,11 @@ async function main(argv: readonly string[]): Promise<number> {
         setAside,
         format: args.format,
         requests: decision.requests.length,
-        model: [...new Set(decision.requests.map((r) => r.model))].join(","),
-        inputTokens: decision.requests.reduce((n: number, r) => n + r.inputTokens, 0),
-        elapsedMs: Date.now() - started,
+        model: models,
+        inputTokens,
+        elapsedMs: Date.now() - startedAt,
         outcome: "ok",
-        requestIds: decision.requests.map((r) => r.requestId ?? "-"),
+        requestIds: decision.requests.map((request) => request.requestId ?? "-"),
     });
     return 0;
 }
@@ -220,20 +247,20 @@ async function main(argv: readonly string[]): Promise<number> {
 // into the caller's context, which the one-line rule exists to keep clear. The reader has what it asked for and
 // the rest has no reader, so the process ends there, quietly, with the usage line already appended: every write
 // to stdout is synchronous on a pipe, so the event fires after `main` has run past them.
-process.stdout.on("error", (err: NodeJS.ErrnoException) => {
-    if (err.code === "EPIPE") process.exit(0);
-    process.stderr.write(`${oneLine(`decide: unexpected: stdout ${err.message}`)}\n`);
+process.stdout.on("error", (error: NodeJS.ErrnoException) => {
+    if (error.code === "EPIPE") process.exit(0);
+    process.stderr.write(`${oneLine(`decide: unexpected: stdout ${error.message}`)}\n`);
     process.exit(1);
 });
 
 try {
     process.exitCode = await main(process.argv.slice(2));
-} catch (err) {
-    if (err instanceof DecideError) {
-        process.stderr.write(`${err.describe()}\n`);
-        process.exitCode = err.exitStatus;
+} catch (error) {
+    if (error instanceof DecideError) {
+        process.stderr.write(`${error.describe()}\n`);
+        process.exitCode = error.exitStatus;
     } else {
-        process.stderr.write(`${oneLine(`decide: unexpected: ${err instanceof Error ? err.message : String(err)}`)}\n`);
+        process.stderr.write(`${oneLine(`decide: unexpected: ${error instanceof Error ? error.message : String(error)}`)}\n`);
         process.exitCode = 1;
     }
 }

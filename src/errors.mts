@@ -57,10 +57,10 @@ export class DecideError extends Error {
      * and no control character however the message or a detail came by one.
      */
     describe(): string {
-        const tail = Object.entries(this.detail)
+        const detailText = Object.entries(this.detail)
             .map(([key, value]) => `${key}=${Array.isArray(value) ? value.join(";") : String(value)}`)
             .join(" ");
-        return oneLine(`decide: ${this.code}: ${this.message}${tail === "" ? "" : ` [${tail}]`}`);
+        return oneLine(`decide: ${this.code}: ${this.message}${detailText === "" ? "" : ` [${detailText}]`}`);
     }
 }
 
