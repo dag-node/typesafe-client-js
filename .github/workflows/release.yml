@@ -27,6 +27,38 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+
+      # The tag is the release authority, so it is checked before anything else runs. The key
+      # that signs it is not one this workflow can use: the only signing secret here is
+      # GPG_SIGNING_KEY, which signs the artifact, so a runner does not hold a key that
+      # produces a tag signature passing this step.
+      #
+      # The fingerprint is the pin; the URL is only transport. A key added to a compromised
+      # account does not match it, and because the pin names the PRIMARY rather than the
+      # subkey that signs, rotating the subkey leaves this step alone.
+      - name: Verify the tag signature
+        env:
+          TAG_SIGNING_PRIMARY_FPR: 225DFF22D0221D3DD68CCEFFFABAF500E7D90733
+          TAG_SIGNING_KEY_URL: https://github.com/p4nda.gpg
+        run: |
+          set -euo pipefail
+          # checkout leaves a detached HEAD; fetch the tag object itself, which is what
+          # carries the signature. A lightweight tag has none and fails here, as it should.
+          git fetch --no-tags --depth=1 origin \
+              "+refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          gnupghome="$(mktemp -d)"
+          trap 'rm -rf "${gnupghome}"' EXIT
+          export GNUPGHOME="${gnupghome}"
+          curl -fsS "${TAG_SIGNING_KEY_URL}" | gpg --batch --quiet --import
+          # `--raw` prints GnuPG's status lines. VALIDSIG names the subkey that signed and, as
+          # its last field, the primary that certified it -- which is the field pinned here.
+          status="$(git verify-tag --raw "${GITHUB_REF_NAME}" 2>&1)"
+          if ! grep -qE "^\[GNUPG:\] VALIDSIG .* ${TAG_SIGNING_PRIMARY_FPR}$" <<<"${status}"; then
+              printf 'tag %s is not signed by %s\n%s\n' \
+                  "${GITHUB_REF_NAME}" "${TAG_SIGNING_PRIMARY_FPR}" "${status}" >&2
+              exit 1
+          fi
+
         with:
           node-version: 22
           cache: npm
