@@ -149,6 +149,14 @@ and not yet taken (a second finding on the same line keeps its line as
 from an input or a body replaced, so text quoted in it cannot add a line or
 style a terminal.
 
+Two classes of invisible character part ways there. An item carrying a
+Unicode tag character is refused: those are invisible to a reader and
+ordinary text to a tokenizer, so sending one puts instructions in the
+request that its caller cannot see. Zero-width and bidirectional characters
+are counted on the summary line and sent unchanged — they mislead a reader
+rather than the model, and a caller asking which lines carry a
+bidirectional override needs them to arrive intact.
+
 ## Using the build output
 
 Each tagged release carries `dist/` as a tarball with its `sha256` and a

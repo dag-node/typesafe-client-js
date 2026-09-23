@@ -11,7 +11,7 @@
 // per-attempt timeout -- because an operator's file survives an upgrade of the artifact, where the constants in
 // core.mts are replaced along with it. A value outside its documented range is refused rather than replaced with
 // the default: a threshold that silently reverts changes what is kept, with no line saying so. The default for
-// each key is the one defaults.mts exports; this file holds no copy.
+// each key is the one defaults.mts exports; this file does not hold a copy.
 //
 // Every value here is untrusted input that an operator hand-edits, so each one is checked against the form its use
 // requires -- a probability, a whole number of milliseconds, a bounded token, a hostname, an https origin -- and a

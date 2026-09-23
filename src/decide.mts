@@ -129,7 +129,7 @@ function summary(decision: Decision<NoulRow>, setAside: number, format: Format):
     const uncertain = decision.uncertain.length === 0 ? "" : ` (uncertain: ${decision.uncertain.map((r) => r.id).join(" ")})`;
     const dropped = decision.dropped.length === 0 ? "none" : decision.dropped.map((r) => r.id).join(" ");
     // A cut item and a set-aside line are evidence the model did not see, so the summary names each count.
-    const bounded = [decision.cut === 0 ? "" : `${decision.cut} item(s) cut at ${LIMITS.maxItemChars} chars`, setAside === 0 ? "" : `${setAside} line(s) set aside by --format ${format}`]
+    const bounded = [decision.cut === 0 ? "" : `${decision.cut} item(s) cut at ${LIMITS.maxItemChars} chars`, setAside === 0 ? "" : `${setAside} line(s) set aside by --format ${format}`, decision.invisible === 0 ? "" : `${decision.invisible} item(s) carry invisible formatting`]
         .filter((part) => part !== "")
         .join(", ");
     return `decide: kept ${decision.kept.length}/${decision.total}${uncertain}; dropped: ${dropped}${bounded === "" ? "" : `; ${bounded}`}; ${models}, ${decision.requests.length} request(s), ${(elapsed / 1000).toFixed(1)}s, ${tokens} tokens`;
@@ -200,6 +200,7 @@ async function main(argv: readonly string[]): Promise<number> {
         items: decision.total,
         kept: decision.kept.length,
         cut: decision.cut,
+        invisible: decision.invisible,
         setAside,
         format: args.format,
         requests: decision.requests.length,

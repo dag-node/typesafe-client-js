@@ -272,7 +272,8 @@ export async function send(
     const body = JSON.stringify(payload);
     let attempt = 0;
     for (;;) {
-        // Checked before the attempt, so a cancellation already in force makes no request whatever fetch does with it.
+        // Checked before the attempt, so a cancellation already in force does not make a request, whatever
+        // fetch does with it.
         if (signal.aborted) throw new DecideError(ErrorCode.deadline, "the invocation was cancelled", {}, { cause: signal.reason });
         const attemptSignal = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
         let response: Response;

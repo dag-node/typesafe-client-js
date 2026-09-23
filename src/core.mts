@@ -70,6 +70,8 @@ export interface Decision<Row> {
     readonly total: number;
     /** Items whose text, rule or context the item bound cut before sending. */
     readonly cut: number;
+    /** Items carrying a character that hides or reorders what a reader sees. */
+    readonly invisible: number;
     readonly kept: readonly Row[];
     readonly dropped: readonly Row[];
     readonly uncertain: readonly Row[];
@@ -84,6 +86,23 @@ const ID_RE = /^[A-Za-z0-9/][A-Za-z0-9._:/@+-]{0,199}$/;
 // could never be answered, so it is not an id.
 const RESERVED_IDS: ReadonlySet<string> = new Set(["constructor", "prototype"]);
 
+// Two classes of character with no visible glyph, handled differently because they deceive different readers.
+//
+// A TAG character is invisible to a reader and ordinary text to a tokenizer, so a listing carrying one sends the
+// model instructions its caller cannot see. Sending it is the harm, and a count on the summary line does not undo
+// it, so an item carrying one is refused.
+//
+// The rest -- zero-width, bidirectional, and the word joiners -- reorder or hide what a READER sees and leave the
+// model's input unchanged. They are counted and sent: a caller asking which lines carry a bidirectional override
+// needs them to arrive intact, which is the case this check exists to serve rather than to break.
+//
+// Private use (U+E000-U+F8FF) is deliberately out of the refusal and the count: an icon font puts those in
+// ordinary terminal output, so counting them would report a listing piped in from a themed shell. Confusable
+// scripts are out too -- telling Cyrillic a from Latin a needs the Unicode confusables table, a dependency this
+// project does not carry.
+const TAG_CHARACTER = /[\u{E0000}-\u{E007F}]/u;
+const INVISIBLE_FORMATTING = /[\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/u;
+
 /** Whether `id` is an item id this loop accepts; parsers.mts derives an id only where this holds. */
 export function isItemId(id: string): boolean {
     return ID_RE.test(id) && !RESERVED_IDS.has(id);
@@ -94,6 +113,8 @@ const cut = (text: string, max: number): string => (text.length <= max ? text : 
 export interface Normalized {
     readonly items: Item[];
     readonly cut: number;
+    /** Items carrying a character that hides or reorders what a reader sees. Reported, and sent. */
+    readonly invisible: number;
 }
 
 /** Checks ids unique and well-formed, text present, and cuts each field to the item bound. */
@@ -102,18 +123,24 @@ export function normalizeItems(items: readonly Item[]): Normalized {
     if (items.length > LIMITS.maxItems) throw inputError(`${items.length} items exceeds the bound of ${LIMITS.maxItems}`, { items: items.length });
     const seen = new Set<string>();
     let cutCount = 0;
+    let invisibleCount = 0;
     const out = items.map((item, index) => {
         if (!isItemId(item.id)) throw inputError(`item ${index} has an invalid id '${item.id.slice(0, 40)}'`);
         if (seen.has(item.id)) throw inputError(`item id '${item.id}' repeats`);
         seen.add(item.id);
         if (item.text.trim() === "") throw inputError(`item '${item.id}' has no text`);
+        const fields = [item.text, item.rule ?? "", item.context ?? ""];
+        if (fields.some((field) => TAG_CHARACTER.test(field))) {
+            throw inputError(`item '${item.id}' carries a Unicode tag character -- invisible to a reader and text to the model`, { id: item.id });
+        }
+        if (fields.some((field) => INVISIBLE_FORMATTING.test(field))) invisibleCount++;
         if (item.text.length > LIMITS.maxItemChars || (item.rule?.length ?? 0) > LIMITS.maxItemChars || (item.context?.length ?? 0) > LIMITS.maxItemChars) cutCount++;
         const row: { id: string; text: string; rule?: string; context?: string } = { id: item.id, text: cut(item.text, LIMITS.maxItemChars) };
         if (item.rule !== undefined && item.rule !== "") row.rule = cut(item.rule, LIMITS.maxItemChars);
         if (item.context !== undefined && item.context !== "") row.context = cut(item.context, LIMITS.maxItemChars);
         return row;
     });
-    return { items: out, cut: cutCount };
+    return { items: out, cut: cutCount, invisible: invisibleCount };
 }
 
 /** Lists of at most maxItemsPerRequest items whose serialized size stays under maxStateChars. */
@@ -224,7 +251,7 @@ async function runChunks<A>(
     const deadline = setTimeout(() => controller.abort(new Error(`total budget of ${LIMITS.totalBudgetMs}ms exceeded`)), LIMITS.totalBudgetMs);
     const onCallerAbort = (): void => controller.abort(run.signal?.reason);
     run.signal?.addEventListener("abort", onCallerAbort, { once: true });
-    // A signal already aborted on entry fires no event: the first send sees the cancellation instead.
+    // A signal already aborted on entry does not fire an event: the first send sees the cancellation instead.
     if (run.signal?.aborted) onCallerAbort();
     const requests: RequestRecord[] = [];
     // Null-prototype: the keys are the provider's, so an accumulator with a prototype would let one of them reach it.
@@ -281,7 +308,7 @@ interface ValidResultWire<A> {
 
 /** Runs the filter template over `items` and returns the compact decision. */
 export async function decideFilter(client: TypeSafeTransport, template: FilterTemplate, rawItems: readonly Item[], params: FilterParams, run: RunOptions = {}): Promise<Decision<NoulRow>> {
-    const { items, cut: cutItems } = normalizeItems(rawItems);
+    const { items, cut: cutItems, invisible } = normalizeItems(rawItems);
     const chunks = chunkItems(items);
     const build = (chunk: readonly Item[]): Omit<SystemOneRequestPayload, "model"> => ({
         state: template.buildState(chunk, params),
@@ -298,12 +325,12 @@ export async function decideFilter(client: TypeSafeTransport, template: FilterTe
         if (band !== null && a.noul >= band[0] && a.noul <= band[1]) uncertain.push(row);
         (template.keep(a, params) ? kept : dropped).push(row);
     }
-    return { template: template.name, total: items.length, cut: cutItems, kept, dropped, uncertain, requests };
+    return { template: template.name, total: items.length, cut: cutItems, invisible, kept, dropped, uncertain, requests };
 }
 
 /** Runs the triage template over `items`; carried for the deferred re-measurement, not dispatched by the command. */
 export async function decideTriage(client: TypeSafeTransport, template: TriageTemplate, rawItems: readonly Item[], params: TriageParams, run: RunOptions = {}): Promise<Decision<ChoiceRow>> {
-    const { items, cut: cutItems } = normalizeItems(rawItems);
+    const { items, cut: cutItems, invisible } = normalizeItems(rawItems);
     const chunks = chunkItems(items);
     const build = (chunk: readonly Item[]): Omit<SystemOneRequestPayload, "model"> => ({
         state: template.buildState(chunk, params),
@@ -322,5 +349,5 @@ export async function decideTriage(client: TypeSafeTransport, template: TriageTe
         };
         (template.keep(a, params) ? kept : dropped).push(row);
     }
-    return { template: template.name, total: items.length, cut: cutItems, kept, dropped, uncertain: [], requests };
+    return { template: template.name, total: items.length, cut: cutItems, invisible, kept, dropped, uncertain: [], requests };
 }

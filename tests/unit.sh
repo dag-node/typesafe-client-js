@@ -140,6 +140,7 @@ run "" filter --task t --config "${conf}"; expect_refusal "a valid file, then an
 run "$(printf 'x:%d: y\n' {1..1001})" filter --task t --config "${conf}"; expect_refusal "a listing over the item bound" 2 input
 run "$(head -c 4000001 /dev/zero | tr '\0' x)" filter --task t --config "${conf}"; expect_refusal "stdin over the input bound, refused as it is read" 2 input
 run "$(printf 'a:1: y\nb:2: z\nnot a finding\n')" filter --task t --format prose-check --config "${conf}"; expect_refusal "a prose-check record the parser cannot place" 2 input
+run "$(printf 'a:1: safe\U000E0001hidden\n')" filter --task t --config "${conf}"; expect_refusal "a Unicode tag character in an item" 2 input
 # The refused line is quoted on stderr; the escape and the carriage return it carries are not.
 run "$(printf 'bad \033[31mred\033[0m\r%s\n' "$(printf 'a%.0s' {1..400})")" filter --task t --format prose-check --config "${conf}"; expect_refusal "a refused line carrying an escape sequence" 2 input
 if [[ "$(wc -l <<<"${err}")" -eq 1 ]] && ! grep -q $'\033' "${TESTDIR}/err" && ! grep -q $'\r' "${TESTDIR}/err"; then pass "the stderr line holds no control character from the input"; else fail "stderr carries a control character: $(cat -A "${TESTDIR}/err" | head -c 200)"; fi
@@ -230,6 +231,9 @@ for (const [what, body, needle] of cases) {
 const opts = { rewrite: "r", keep: "k", open: "o" };
 const choiceGood = { model: "m", answers: { a: { type: "choice", choice: "keep", confidence: 0.8, probabilities: { rewrite: 0.1, keep: 0.8, open: 0.1 } } }, usage: { input_tokens: 1, output_tokens: 0 } };
 report(contractProblems(choiceGood, ["a"], "choice", opts).length === 0, "contract: a valid choice body passes");
+const invisible = normalizeItems([{ id: "a", text: "safe\u202Ehidden" }, { id: "b", text: "plain" }, { id: "c", text: "zero\u200bwidth" }]);
+report(invisible.invisible === 2 && invisible.items[0].text.includes("\u202E") && invisible.items[2].text.includes("\u200B"), "invisible formatting is counted per item and left in the text", JSON.stringify(invisible.invisible));
+report((() => { try { normalizeItems([{ id: "a", text: "tag\u{E0001}here" }]); return false; } catch (e) { return e.code === "input"; } })(), "a tag character is refused rather than counted");
 const badChoice = [
   ["choice outside the options", (b) => { b.answers.a.choice = "maybe"; }, "not an option"],
   ["probabilities not summing to 1", (b) => { b.answers.a.probabilities.keep = 0.3; }, "sum to"],
