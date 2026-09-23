@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 Ondřej Nedomlel <tools@dagnode.com>
 // SPDX-License-Identifier: MIT
 // src/errors.mts
 // Every failure the decide command reports, as one class carrying a code, so the caller (an agent reading stderr,

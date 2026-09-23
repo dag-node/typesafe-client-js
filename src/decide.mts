@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 Ondřej Nedomlel <tools@dagnode.com>
 // SPDX-License-Identifier: MIT
 // src/decide.mts -- the command, run as
 //

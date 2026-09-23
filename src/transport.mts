@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 Ondřej Nedomlel <tools@dagnode.com>
 // SPDX-License-Identifier: MIT
 // src/transport.mts
 // The one request the decide command makes: POST <base>/v1/systemone with a bearer token, at most one retry, under a

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Ondřej Nedomlel <tools@dagnode.com>
 # SPDX-License-Identifier: MIT
 # tests/unit.sh
 # The offline suite over the built command in dist/. What it proves without a network: every refusal the command

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Ondřej Nedomlel <tools@dagnode.com>
 # SPDX-License-Identifier: MIT
 # build.sh -- install what the lockfile pins, type-check, and emit dist/.
 #

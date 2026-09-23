@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 Ondřej Nedomlel <tools@dagnode.com>
 // SPDX-License-Identifier: MIT
 // src/config.mts
 // Reads the configuration from the KEY=value file `--config` names, and refuses every state in which the key could

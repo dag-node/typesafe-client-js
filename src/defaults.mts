@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 Ondřej Nedomlel <tools@dagnode.com>
 // SPDX-License-Identifier: MIT
 // src/defaults.mts
 // The values the configuration file overrides, gathered in one module so what an operator may change is one file

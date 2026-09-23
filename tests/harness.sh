@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Ondřej Nedomlel <tools@dagnode.com>
 # SPDX-License-Identifier: MIT
 # tests/harness.sh
 # The counters and verdict verbs a suite here reports through, so a run's output is greppable line by line and its

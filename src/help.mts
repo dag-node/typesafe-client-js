@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 Ondřej Nedomlel <tools@dagnode.com>
 // SPDX-License-Identifier: MIT
 // src/help.mts
 // The command's help text, kept apart from the command so the words an operator reads are edited without touching
@@ -10,7 +11,7 @@
 // injected at build time: dist/ is exactly tsc's output from src/, so a rebuild from a tag reproduces it byte for
 // byte, and a build step that rewrote a file would end that. The suite holds the two to each other, so a release
 // cannot ship a version that disagrees with its own manifest.
-export const VERSION = "0.1.0";
+export const VERSION = "0.1.1";
 
 export const USAGE = `usage: <listing> | node decide.mjs filter --task "<one sentence>" --config <file> [--format lines|prose-check|msbuild] [--threshold 0.5] [--usage-log <file>]
   filter       keep the lines that bear on the task; the rest are listed by id on the summary line

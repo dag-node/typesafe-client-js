@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 Ondřej Nedomlel <tools@dagnode.com>
 // SPDX-License-Identifier: MIT
 // src/parsers.mts
 // Turns a listing on stdin into items with stable ids. `lines` reads one item per line and takes a leading

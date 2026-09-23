@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 Ondřej Nedomlel <tools@dagnode.com>
 // SPDX-License-Identifier: MIT
 // src/core.mts
 // The bounded request loop: items are checked and cut, chunked to a request size, sent one request at a time

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 Ondřej Nedomlel <tools@dagnode.com>
 // SPDX-License-Identifier: MIT
 // src/templates.mts
 // The question templates: what state a template sends, the one question it asks per item, and how an answer is

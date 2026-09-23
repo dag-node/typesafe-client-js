@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 Ondřej Nedomlel <tools@dagnode.com>
 // SPDX-License-Identifier: MIT
 // src/index.mts
 // The library surface, for a program that embeds the client rather than running the command. It re-exports what a
