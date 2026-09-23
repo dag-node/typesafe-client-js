@@ -129,6 +129,7 @@ the caller is never left holding a partial result.
 | `config.mts` | the file's form, and every refusal on it |
 | `help.mts` | the usage text |
 | `errors.mts` | the failure classes and the exit status of each |
+| `validation.mts` | the value checks more than one module applies: object, probability, count, model name |
 | `templates.mts` | the question, and the criteria it is judged against |
 | `parsers.mts` | a listing to items, one reader per `--format` |
 | `transport.mts` | the one request, and the gate on the response |
