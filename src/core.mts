@@ -92,16 +92,22 @@ const RESERVED_IDS: ReadonlySet<string> = new Set(["constructor", "prototype"]);
 // model instructions its caller cannot see. Sending it is the harm, and a count on the summary line does not undo
 // it, so an item carrying one is refused.
 //
-// The rest -- zero-width, bidirectional, and the word joiners -- reorder or hide what a READER sees and leave the
-// model's input unchanged. They are counted and sent: a caller asking which lines carry a bidirectional override
-// needs them to arrive intact, which is the case this check exists to serve rather than to break.
+// The rest -- zero-width, the word joiners, and the bidirectional embeddings, overrides and isolates -- reorder or
+// hide what a READER sees and leave the model's input unchanged. They are counted and sent: a caller asking which
+// lines carry a bidirectional override needs them to arrive intact, which is the case this check exists to serve
+// rather than to break.
+//
+// Bidirectional text is legitimate infrastructure, and the count targets the control characters, not right-to-left
+// content: a line of Arabic or Hebrew is not counted. The marks U+200E and U+200F are out of the class for the same
+// reason -- they are ordinary formatting wherever a script mixes with digits, so counting them would report correct
+// text, and a signal that fires on correct content erodes.
 //
 // Private use (U+E000-U+F8FF) is deliberately out of the refusal and the count: an icon font puts those in
 // ordinary terminal output, so counting them would report a listing piped in from a themed shell. Confusable
 // scripts are out too -- telling Cyrillic a from Latin a needs the Unicode confusables table, a dependency this
 // project does not carry.
 const TAG_CHARACTER = /[\u{E0000}-\u{E007F}]/u;
-const INVISIBLE_FORMATTING = /[\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/u;
+const INVISIBLE_FORMATTING = /[\u200b-\u200d\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/u;
 
 /** Whether `id` is an item id this loop accepts; parsers.mts derives an id only where this holds. */
 export function isItemId(id: string): boolean {

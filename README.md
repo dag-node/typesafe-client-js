@@ -152,10 +152,13 @@ style a terminal.
 Two classes of invisible character part ways there. An item carrying a
 Unicode tag character is refused: those are invisible to a reader and
 ordinary text to a tokenizer, so sending one puts instructions in the
-request that its caller cannot see. Zero-width and bidirectional characters
-are counted on the summary line and sent unchanged — they mislead a reader
-rather than the model, and a caller asking which lines carry a
-bidirectional override needs them to arrive intact.
+request that its caller cannot see. Zero-width characters and bidirectional
+controls are counted on the summary line and sent unchanged — they mislead
+a reader rather than the model, and a caller asking which lines carry a
+bidirectional override needs them to arrive intact. The count targets the
+controls, not right-to-left text: a line of Arabic or Hebrew is not
+counted, and neither are the marks U+200E and U+200F, which are ordinary
+formatting wherever a script mixes with digits.
 
 ## Using the build output
 

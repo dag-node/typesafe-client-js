@@ -234,6 +234,8 @@ report(contractProblems(choiceGood, ["a"], "choice", opts).length === 0, "contra
 const invisible = normalizeItems([{ id: "a", text: "safe\u202Ehidden" }, { id: "b", text: "plain" }, { id: "c", text: "zero\u200bwidth" }]);
 report(invisible.invisible === 2 && invisible.items[0].text.includes("\u202E") && invisible.items[2].text.includes("\u200B"), "invisible formatting is counted per item and left in the text", JSON.stringify(invisible.invisible));
 report((() => { try { normalizeItems([{ id: "a", text: "tag\u{E0001}here" }]); return false; } catch (e) { return e.code === "input"; } })(), "a tag character is refused rather than counted");
+const rtl = normalizeItems([{ id: "a", text: "\u05E9\u05DC\u05D5\u05DD 42\u200F" }, { id: "b", text: "x\u200Ey" }, { id: "c", text: "\u0645\u0631\u062D\u0628\u0627" }, { id: "d", text: "a\u2067b\u2069" }]);
+report(rtl.invisible === 1, "right-to-left text and the LRM/RLM marks are not counted; an isolate is", JSON.stringify(rtl.invisible));
 const badChoice = [
   ["choice outside the options", (b) => { b.answers.a.choice = "maybe"; }, "not an option"],
   ["probabilities not summing to 1", (b) => { b.answers.a.probabilities.keep = 0.3; }, "sum to"],
