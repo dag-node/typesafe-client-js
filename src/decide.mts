@@ -19,7 +19,8 @@
 // scope); 3 configuration (the file is missing, unreadable, or holds a value outside its form); 4 the provider
 // refused or was unreachable; 5 the answer did not hold the documented shape; 6 the deadline passed; 1 an
 // unexpected error. On every non-zero status the one stderr line is all that is printed, so the caller's fallback
-// is the listing it already holds.
+// is the listing it already holds. A reader that closes stdout before the output is complete ends the command
+// with status 0 and nothing on stderr.
 //
 // The triage template is deferred; asking for it exits 2 with the reason.
 
@@ -212,6 +213,17 @@ async function main(argv: readonly string[]): Promise<number> {
     });
     return 0;
 }
+
+// The caller pipes the output, and a reader that stops early (`| head -1`) closes the pipe under the writes still
+// to come. Node reports that as an 'error' event on stdout; left unhandled, it prints a stack trace to stderr --
+// into the caller's context, which the one-line rule exists to keep clear. The reader has what it asked for and
+// the rest has no reader, so the process ends there, quietly, with the usage line already appended: every write
+// to stdout is synchronous on a pipe, so the event fires after `main` has run past them.
+process.stdout.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EPIPE") process.exit(0);
+    process.stderr.write(`${oneLine(`decide: unexpected: stdout ${err.message}`)}\n`);
+    process.exit(1);
+});
 
 try {
     process.exitCode = await main(process.argv.slice(2));

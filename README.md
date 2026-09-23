@@ -34,8 +34,8 @@ contract, each gate on a hostile response, the pinning of the file's
 endpoint, key and model over an environment variable of the same name, and
 the command end to end against a stub that stands in for the provider —
 with no environment at all, with a read-only file in a read-only directory,
-and with nothing written unless `--usage-log` names a file. No case opens
-a connection.
+with nothing written unless `--usage-log` names a file, and with a reader
+that closes the pipe early. No case opens a connection.
 It runs against `dist/`, so it follows the build rather than preceding it,
 and CI fails on it.
 
@@ -64,7 +64,9 @@ token the stderr line carries, as `decide: <class>: <message>`:
 | `1` | — | an unexpected error |
 
 On every non-zero status the single stderr line is all that is printed, so
-the caller falls back to the listing it already holds.
+the caller falls back to the listing it already holds. A reader that closes
+stdout before the output is complete, as `| head -1` does, ends the command
+with status 0 and nothing on stderr: the reader has what it asked for.
 
 `--usage-log <file>` appends one JSON line of counts per run — items, kept,
 requests, tokens, elapsed time, the outcome — with no item text, no task and

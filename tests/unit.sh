@@ -10,7 +10,7 @@
 # malformed body it is driven with; each gate refuses the response built to pass it; and, against a provider stub
 # preloaded in place of fetch, the command runs end to end -- the kept lines verbatim, the summary, the usage
 # record, the exit status of each failure class -- with no environment, with a read-only file in a read-only
-# directory, and with nothing written unless --usage-log names a file.
+# directory, with nothing written unless --usage-log names a file, and with a reader that closes the pipe early.
 # No case here opens a connection.
 #
 # Hermetic: fixtures in the suite's own temporary directory, removed on exit.
@@ -277,6 +277,19 @@ if [[ ${rc} -eq 0 && "${out}" == "keep"* && "${out}" == *"2 line(s) set aside by
 run_stub 401 "${listing}" filter --task t --config "${conf}"; expect_refusal "the provider's 401" 4 provider
 run_stub notjson "${listing}" filter --task t --config "${conf}"; expect_refusal "an answer that is not JSON" 5 contract
 run_stub timeout "${listing}" filter --task t --config "${conf}"; expect_refusal "no answer within the timeout, after the one retry" 6 deadline
+
+# 6. A reader that closes the pipe early. The output is made larger than a pipe buffer so the command blocks on
+# the write until head has read its line and gone; the write that follows fails with EPIPE.
+pad="$(printf 'x%.0s' {1..300})"
+set +e
+{ for i in $(seq 1 1000); do printf 'k:%d: keep %s\n' "${i}" "${pad}"; done; } | "${NODE}" --import "$(stub ok)" "${CLI}" filter --task t --config "${conf}" --usage-log "${TESTDIR}/epipe.jsonl" 2>"${TESTDIR}/err" | head -1 >/dev/null
+epipe_rc=${PIPESTATUS[1]}
+set -e
+if [[ ${epipe_rc} -eq 0 && ! -s "${TESTDIR}/err" && "$(wc -l <"${TESTDIR}/epipe.jsonl")" -eq 1 ]]; then
+    pass "a reader closing stdout early (| head -1): exit 0, nothing on stderr, the usage line still appended"
+else
+    fail "a reader closing stdout early: rc=${epipe_rc} stderr=$(wc -l <"${TESTDIR}/err") line(s) '$(head -c 120 "${TESTDIR}/err" | tr '\n' '|')' usage=$(wc -l <"${TESTDIR}/epipe.jsonl" 2>/dev/null)"
+fi
 
 # 7. The locale does not reach the bytes: a minimal C locale and a UTF-8 one print the same result.
 intl="$(printf 'a:1: keep na\xc3\xafve \xe2\x80\x94 \xe2\x9c\x93 \xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d\nb:2: drop \xc3\xbcn\xc3\xafcode\n')"
