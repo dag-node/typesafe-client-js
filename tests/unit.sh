@@ -5,7 +5,7 @@
 # makes before a request leaves the process with the exit status its header documents and one stderr line naming
 # the class; the configuration file's refusals hold on the world bits, on a symlink, and on each value whose form
 # config.mts states; the request carries the file's own origin, key and model, and an environment variable of the
-# same name changes none of the three; the three stdin parsers keep a `path:line` id once, fall back to `L<n>` on a
+# same name changes none of them; each stdin parser keeps a `path:line` id once, falls back to `L<n>` on a
 # repeat, refuse a record they cannot place and read a hostile line in linear time; the answer contract rejects each
 # malformed body it is driven with; and each gate refuses the response built to pass it. No case here opens a
 # connection.
@@ -54,7 +54,7 @@ else
     fail "--help: rc=${rc} out='$(head -c 120 <<<"${out}")'"
 fi
 
-# --version answers on a host holding no configuration, which is the state that raises the
+# `--version` answers on a host that has no configuration file, which is the state that raises the
 # question of which build this is, so it is checked before every other argument.
 for flag in --version -v; do
     run "" "${flag}"
@@ -167,7 +167,7 @@ report(chunkItems(many).map((c) => c.length).join("/") === want.join("/"), \`chu
 // L<n> rather than failing the listing, which is what every MSBuild log at normal verbosity depends on.
 const clock = parseLines("Build started 9/22/2026 10:18:09 AM.\\nsrc/a.sh:12: real\\nTime Elapsed 00:00:01.81\\n").items;
 report(clock.length === 3 && clock[0].id === "L1" && clock[1].id === "src/a.sh:12" && clock[2].id === "L3", "lines: a clock time falls back to L<n>", JSON.stringify(clock));
-// Two findings on one line (shellcheck -f gcc) derive one path:line: the second keeps its line under L<n>.
+// Two findings on one line, as a gcc-format checker prints them, derive one path:line: the second keeps its line under L<n>.
 const twice = parseLines("a.sh:3:5: warning SC2086\\na.sh:3:9: note SC2046\\n").items;
 report(twice.length === 2 && twice[0].id === "a.sh:3" && twice[1].id === "L2", "lines: a repeated path:line falls back to L<n>", JSON.stringify(twice));
 // A location spelled like the fallback ("L9 : error") is not taken as an id, so no fallback can collide with one.

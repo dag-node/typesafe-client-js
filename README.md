@@ -28,11 +28,11 @@ the same output and is the path to take where the compiler in
 `node_modules` cannot be executed: it picks whichever compiler runs at the
 version `package.json` pins, and refuses any other version.
 
-`bash tests/unit.sh` (also `npm test`) runs the offline suite: 82 checks
-over every refusal the command makes before a request, the three stdin
-parsers, the answer contract, each gate on a hostile response, and the
-pinning of the file's endpoint, key and model over an environment variable
-of the same name. No case opens a connection.
+`bash tests/unit.sh` (also `npm test`) runs the offline suite: every
+refusal the command makes before a request, each stdin parser, the answer
+contract, each gate on a hostile response, and the pinning of the file's
+endpoint, key and model over an environment variable of the same name. No
+case opens a connection.
 It runs against `dist/`, so it follows the build rather than preceding it,
 and CI fails on it.
 
