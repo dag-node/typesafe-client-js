@@ -6,7 +6,7 @@
 // by the command (decide.mts). TEMPLATE_VERSION is recorded with every usage line so a template edit is visible
 // beside the model that answered.
 
-// Types only, erased on emit. `noul` and `choice` build the provider's own two-field object literals here, so the
+// Types only, erased on emit. `makeNoulQuestion` and `makeChoiceQuestion` build the provider's own two-field object literals here, so the
 // shipped JavaScript does not import the SDK; their return types bind them to the published declarations, so a
 // release that changes what a question carries fails the build. See transport.mts for the rest of the drift binding.
 import type { ChoiceQuestion as SdkChoiceQuestion, EntryType, NoulQuestion as SdkNoulQuestion } from "@typesafe-ai/sdk";
@@ -14,11 +14,11 @@ import type { ChoiceQuestion as SdkChoiceQuestion, EntryType, NoulQuestion as Sd
 export const TEMPLATE_VERSION = 2;
 
 /** One question whose answer is P(true), judged against the two criteria. */
-const noul = (instructions: Readonly<Record<string, string>>, criteria: { readonly true: string; readonly false: string }): SdkNoulQuestion =>
+const makeNoulQuestion = (instructions: Readonly<Record<string, string>>, criteria: { readonly true: string; readonly false: string }): SdkNoulQuestion =>
     ({ type: "noul", instructions, criteria });
 
 /** One question whose answer is a label from `criteria`, a map of label to the description that selects it. */
-const choice = <T extends Readonly<Record<string, string>>>(instructions: Readonly<Record<string, string>>, criteria: T): SdkChoiceQuestion<T> =>
+const makeChoiceQuestion = <TCriteria extends Readonly<Record<string, string>>>(instructions: Readonly<Record<string, string>>, criteria: TCriteria): SdkChoiceQuestion<TCriteria> =>
     ({ type: "choice", instructions, criteria });
 
 /** One line of a listing after normalisation. `rule` and `context` travel only when the template forwards them. */
@@ -56,14 +56,14 @@ export interface TriageParams {
     readonly checker: string;
 }
 
-interface TemplateBase<Q, A, P> {
+interface TemplateBase<TQuestion, TAnswer, TParams> {
     readonly name: string;
-    readonly kind: A extends NoulAnswer ? "noul" : "choice";
+    readonly kind: TAnswer extends NoulAnswer ? "noul" : "choice";
     readonly options: Readonly<Record<string, string>> | null;
     /** The `state` the request carries, in the provider's own JSON-value vocabulary. */
-    buildState(items: readonly Item[], params: P): EntryType;
-    buildQuestion(item: Item): Q;
-    keep(answer: A, params: P): boolean;
+    buildState(items: readonly Item[], params: TParams): EntryType;
+    buildQuestion(item: Item): TQuestion;
+    keep(answer: TAnswer, params: TParams): boolean;
     /** The band of P(true) reported as uncertain, for a noul template. */
     readonly uncertainBand: readonly [number, number] | null;
 }
@@ -72,7 +72,7 @@ export type FilterTemplate = TemplateBase<NoulQuestion, NoulAnswer, FilterParams
 export type TriageTemplate = TemplateBase<ChoiceQuestion, ChoiceAnswer, TriageParams>;
 
 export const MAX_TASK_CHARS = 400;
-const cut = (text: string, max: number): string => (text.length <= max ? text : `${text.slice(0, max)} [...cut at ${max} chars]`);
+const truncateText = (text: string, maxChars: number): string => (text.length <= maxChars ? text : `${text.slice(0, maxChars)} [...cut at ${maxChars} chars]`);
 
 /**
  * The instruction every template carries: item text is evidence, and is not a directive. The vendor documents that
@@ -87,8 +87,8 @@ export const filter: FilterTemplate = {
     kind: "noul",
     options: null,
     uncertainBand: [0.35, 0.65],
-    buildState: (items, params) => ({ task: cut(params.task, MAX_TASK_CHARS), note: EVIDENCE_NOTE, items: [...items] }),
-    buildQuestion: (item) => noul(
+    buildState: (items, params) => ({ task: truncateText(params.task, MAX_TASK_CHARS), note: EVIDENCE_NOTE, items: [...items] }),
+    buildQuestion: (item) => makeNoulQuestion(
         {
             question: `Does the item whose id is "${item.id}" satisfy the task stated in \`task\`?`,
             item_id: item.id,
@@ -119,8 +119,8 @@ export const triage: TriageTemplate = {
     kind: "choice",
     options: TRIAGE_OPTIONS,
     uncertainBand: null,
-    buildState: (items, params) => ({ checker: cut(params.checker, MAX_TASK_CHARS), note: EVIDENCE_NOTE, findings: [...items] }),
-    buildQuestion: (item) => choice(
+    buildState: (items, params) => ({ checker: truncateText(params.checker, MAX_TASK_CHARS), note: EVIDENCE_NOTE, findings: [...items] }),
+    buildQuestion: (item) => makeChoiceQuestion(
         {
             question: `For the finding whose id is "${item.id}", which disposition applies?`,
             finding_id: item.id,

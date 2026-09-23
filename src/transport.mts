@@ -30,16 +30,16 @@ const MAX_BODY_BYTES = 1 << 20;
 /** How much of a failing body reaches the error detail. */
 const MAX_SNIPPET_CHARS = 200;
 /** A model name reaches the summary line and the usage log, so it is admitted only in the shape config.mts accepts. */
-const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const MODEL_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 /** `application/json`, with or without parameters; a longer subtype is not JSON. */
-const JSON_CONTENT_TYPE = /^application\/json\s*(?:;|$)/i;
+const JSON_CONTENT_TYPE_PATTERN = /^application\/json\s*(?:;|$)/i;
 /** Retry backoff, and the ceiling on a provider-supplied Retry-After. */
 const BACKOFF_INITIAL_MS = 500;
 const BACKOFF_MAX_MS = 5_000;
 const BACKOFF_JITTER = 0.25;
 const MAX_RETRY_AFTER_MS = 60_000;
 /** A request id reaches the usage log, so it is admitted only in this shape. */
-const REQUEST_ID_RE = /^[A-Za-z0-9._:-]{1,64}$/;
+const REQUEST_ID_PATTERN = /^[A-Za-z0-9._:-]{1,64}$/;
 
 /** The request target and credential, pinned from the credential file. */
 export interface TypeSafeTransport {
@@ -95,25 +95,25 @@ export interface SendOptions {
     readonly maxRetries: number;
 }
 
-const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
-const isUnit = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 1;
-const isCount = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= 0;
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+const isProbability = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
+const isNonNegativeInteger = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value) && value >= 0;
 /** The value of an OWN property, or undefined -- never a lookup through a prototype. */
-const own = (o: unknown, key: string): unknown => (isRecord(o) && Object.hasOwn(o, key) ? o[key] : undefined);
+const ownProperty = (target: unknown, key: string): unknown => (isRecord(target) && Object.hasOwn(target, key) ? target[key] : undefined);
 
 const providerError = (message: string, detail: Record<string, string | number>): DecideError =>
     new DecideError(ErrorCode.provider, message, detail);
 const contractError = (message: string, detail: Record<string, string | number> = {}): DecideError =>
     new DecideError(ErrorCode.contract, message, detail);
-const errorName = (err: unknown): string => (err instanceof Error ? err.name : "unknown");
+const errorNameOf = (error: unknown): string => (error instanceof Error ? error.name : "unknown");
 
-/** Pins the target and credential for every send; `fetchImpl` is the unit test's injection point. */
-export function makeTransport(config: TypeSafeConfig, fetchImpl?: typeof fetch): TypeSafeTransport {
+/** Pins the target and credential for every send; `fetchFunction` is the unit test's injection point. */
+export function makeTransport(config: TypeSafeConfig, fetchFunction?: typeof fetch): TypeSafeTransport {
     return {
         baseURL: config.baseURL,
         apiKey: config.apiKey,
         model: config.model,
-        fetch: fetchImpl ?? globalThis.fetch,
+        fetch: fetchFunction ?? globalThis.fetch,
     };
 }
 
@@ -122,17 +122,17 @@ const isRetryableStatus = (status: number): boolean => status === 408 || status 
 
 /** The provider's requested delay when it names one within the ceiling, else exponential backoff with jitter. */
 function retryDelayMs(attempt: number, headers: Headers): number {
-    const ms = Number(headers.get("retry-after-ms"));
-    if (headers.has("retry-after-ms") && Number.isFinite(ms) && ms >= 0 && ms <= MAX_RETRY_AFTER_MS) return ms;
-    const seconds = Number(headers.get("retry-after"));
-    if (headers.has("retry-after") && Number.isFinite(seconds) && seconds >= 0 && seconds * 1000 <= MAX_RETRY_AFTER_MS) {
-        return seconds * 1000;
+    const retryAfterMs = Number(headers.get("retry-after-ms"));
+    if (headers.has("retry-after-ms") && Number.isFinite(retryAfterMs) && retryAfterMs >= 0 && retryAfterMs <= MAX_RETRY_AFTER_MS) return retryAfterMs;
+    const retryAfterSeconds = Number(headers.get("retry-after"));
+    if (headers.has("retry-after") && Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0 && retryAfterSeconds * 1000 <= MAX_RETRY_AFTER_MS) {
+        return retryAfterSeconds * 1000;
     }
-    const exponential = Math.min(BACKOFF_INITIAL_MS * 2 ** attempt, BACKOFF_MAX_MS);
-    return Math.round(exponential * (1 - Math.random() * BACKOFF_JITTER));
+    const exponentialMs = Math.min(BACKOFF_INITIAL_MS * 2 ** attempt, BACKOFF_MAX_MS);
+    return Math.round(exponentialMs * (1 - Math.random() * BACKOFF_JITTER));
 }
 
-const sleep = (ms: number, signal: AbortSignal): Promise<void> =>
+const sleep = (durationMs: number, signal: AbortSignal): Promise<void> =>
     new Promise((resolve, reject) => {
         if (signal.aborted) {
             reject(signal.reason as Error);
@@ -145,7 +145,7 @@ const sleep = (ms: number, signal: AbortSignal): Promise<void> =>
         const timer = setTimeout(() => {
             signal.removeEventListener("abort", onAbort);
             resolve();
-        }, ms);
+        }, durationMs);
         signal.addEventListener("abort", onAbort, { once: true });
     });
 
@@ -154,23 +154,23 @@ const sleep = (ms: number, signal: AbortSignal): Promise<void> =>
  * refused with the stream cancelled, so a provider cannot hold the invocation open or grow the process by answering.
  */
 async function readCapped(response: Response): Promise<string> {
-    const declared = Number(response.headers.get("content-length"));
-    if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+    const declaredBytes = Number(response.headers.get("content-length"));
+    if (Number.isFinite(declaredBytes) && declaredBytes > MAX_BODY_BYTES) {
         await response.body?.cancel();
-        throw contractError("the answer declares more than the body cap", { cap: MAX_BODY_BYTES, declared });
+        throw contractError("the answer declares more than the body cap", { cap: MAX_BODY_BYTES, declared: declaredBytes });
     }
     if (response.body === null) return "";
     const reader = response.body.getReader();
     const decoder = new TextDecoder("utf-8");
     let text = "";
-    let seen = 0;
+    let bytesRead = 0;
     try {
         for (;;) {
             const { done, value } = await reader.read();
             if (done) break;
             if (value === undefined) continue;
-            seen += value.byteLength;
-            if (seen > MAX_BODY_BYTES) throw contractError("the answer exceeds the body cap", { cap: MAX_BODY_BYTES });
+            bytesRead += value.byteLength;
+            if (bytesRead > MAX_BODY_BYTES) throw contractError("the answer exceeds the body cap", { cap: MAX_BODY_BYTES });
             text += decoder.decode(value, { stream: true });
         }
     } finally {
@@ -180,32 +180,32 @@ async function readCapped(response: Response): Promise<string> {
 }
 
 /** Drops the keys that would reach an object's prototype: the pair to the projection's own-properties-only read. */
-const noProtoKeys = (key: string, value: unknown): unknown =>
+const dropPrototypeKeys = (key: string, value: unknown): unknown =>
     key === "__proto__" || key === "constructor" || key === "prototype" ? undefined : value;
 
 /** One answer, reduced to the fields its kind documents. A field that fails its predicate is dropped, not coerced. */
-function projectAnswer(raw: unknown, kind: "noul" | "choice", optionNames: readonly string[]): Record<string, unknown> {
-    const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
-    if (own(raw, "type") === kind) out["type"] = kind;
+function projectAnswer(rawAnswer: unknown, kind: "noul" | "choice", optionNames: readonly string[]): Record<string, unknown> {
+    const projectedAnswer: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+    if (ownProperty(rawAnswer, "type") === kind) projectedAnswer["type"] = kind;
     if (kind === "noul") {
-        const noul = own(raw, "noul");
-        if (isUnit(noul)) out["noul"] = noul;
-        return out;
+        const noul = ownProperty(rawAnswer, "noul");
+        if (isProbability(noul)) projectedAnswer["noul"] = noul;
+        return projectedAnswer;
     }
-    const chosen = own(raw, "choice");
-    if (typeof chosen === "string" && optionNames.includes(chosen)) out["choice"] = chosen;
-    const confidence = own(raw, "confidence");
-    if (isUnit(confidence)) out["confidence"] = confidence;
-    const probabilities = own(raw, "probabilities");
-    if (isRecord(probabilities)) {
-        const projected: Record<string, number> = Object.create(null) as Record<string, number>;
-        for (const name of optionNames) {
-            const p = own(probabilities, name);
-            if (isUnit(p)) projected[name] = p;
+    const chosenOption = ownProperty(rawAnswer, "choice");
+    if (typeof chosenOption === "string" && optionNames.includes(chosenOption)) projectedAnswer["choice"] = chosenOption;
+    const confidence = ownProperty(rawAnswer, "confidence");
+    if (isProbability(confidence)) projectedAnswer["confidence"] = confidence;
+    const rawProbabilities = ownProperty(rawAnswer, "probabilities");
+    if (isRecord(rawProbabilities)) {
+        const projectedProbabilities: Record<string, number> = Object.create(null) as Record<string, number>;
+        for (const optionName of optionNames) {
+            const probability = ownProperty(rawProbabilities, optionName);
+            if (isProbability(probability)) projectedProbabilities[optionName] = probability;
         }
-        out["probabilities"] = projected;
+        projectedAnswer["probabilities"] = projectedProbabilities;
     }
-    return out;
+    return projectedAnswer;
 }
 
 /**
@@ -213,50 +213,50 @@ function projectAnswer(raw: unknown, kind: "noul" | "choice", optionNames: reado
  * so an id the body offers and this process did not ask for is dropped without being enumerated.
  */
 function projectResult(
-    raw: unknown,
+    rawResult: unknown,
     expectedIds: readonly string[],
     kind: "noul" | "choice",
-    options: Readonly<Record<string, string>> | null,
+    choiceOptions: Readonly<Record<string, string>> | null,
 ): ProjectedResult {
-    if (!isRecord(raw)) throw contractError("the answer is not an object");
-    const optionNames = Object.keys(options ?? {});
+    if (!isRecord(rawResult)) throw contractError("the answer is not an object");
+    const optionNames = Object.keys(choiceOptions ?? {});
     const usage: ProjectedResult["usage"] = Object.create(null) as ProjectedResult["usage"];
-    const inputTokens = own(own(raw, "usage"), "input_tokens");
-    const outputTokens = own(own(raw, "usage"), "output_tokens");
-    if (isCount(inputTokens)) usage.input_tokens = inputTokens;
-    if (isCount(outputTokens)) usage.output_tokens = outputTokens;
+    const inputTokens = ownProperty(ownProperty(rawResult, "usage"), "input_tokens");
+    const outputTokens = ownProperty(ownProperty(rawResult, "usage"), "output_tokens");
+    if (isNonNegativeInteger(inputTokens)) usage.input_tokens = inputTokens;
+    if (isNonNegativeInteger(outputTokens)) usage.output_tokens = outputTokens;
     const answers: Record<string, Record<string, unknown>> = Object.create(null) as Record<string, Record<string, unknown>>;
-    const rawAnswers = own(raw, "answers");
+    const rawAnswers = ownProperty(rawResult, "answers");
     if (isRecord(rawAnswers)) {
         for (const id of expectedIds) {
-            const answer = own(rawAnswers, id);
-            if (isRecord(answer)) answers[id] = projectAnswer(answer, kind, optionNames);
+            const rawAnswer = ownProperty(rawAnswers, id);
+            if (isRecord(rawAnswer)) answers[id] = projectAnswer(rawAnswer, kind, optionNames);
         }
     }
-    const model = own(raw, "model");
-    const out: ProjectedResult = { usage, answers };
-    if (typeof model === "string" && MODEL_RE.test(model)) out.model = model;
-    return out;
+    const model = ownProperty(rawResult, "model");
+    const projectedResult: ProjectedResult = { usage, answers };
+    if (typeof model === "string" && MODEL_NAME_PATTERN.test(model)) projectedResult.model = model;
+    return projectedResult;
 }
 
 /** The id the provider names for this request, admitted only in the shape the usage log records. */
 function requestIdOf(headers: Headers): string | null {
-    const raw = headers.get("x-typesafe-request-id");
-    return raw !== null && REQUEST_ID_RE.test(raw) ? raw : null;
+    const rawRequestId = headers.get("x-typesafe-request-id");
+    return rawRequestId !== null && REQUEST_ID_PATTERN.test(rawRequestId) ? rawRequestId : null;
 }
 
 /** A failing status carries a short snippet of its body, read under the same cap and left unparsed. */
 async function failureFor(response: Response): Promise<DecideError> {
-    let snippet = "";
+    let bodySnippet = "";
     try {
-        snippet = (await readCapped(response)).slice(0, MAX_SNIPPET_CHARS);
+        bodySnippet = (await readCapped(response)).slice(0, MAX_SNIPPET_CHARS);
     } catch {
-        snippet = "";
+        bodySnippet = "";
     }
     const detail: Record<string, string | number> = { status: response.status };
     const requestId = requestIdOf(response.headers);
     if (requestId !== null) detail["request"] = requestId;
-    if (snippet !== "") detail["body"] = snippet;
+    if (bodySnippet !== "") detail["body"] = bodySnippet;
     return providerError(`the provider answered ${response.status}`, detail);
 }
 
@@ -267,10 +267,10 @@ async function failureFor(response: Response): Promise<DecideError> {
 export async function send(
     transport: TypeSafeTransport,
     request: Omit<SystemOneRequestPayload, "model">,
-    { expectedIds, kind, options, signal, timeoutMs, maxRetries }: SendOptions,
+    { expectedIds, kind, options: choiceOptions, signal, timeoutMs, maxRetries }: SendOptions,
 ): Promise<SendOutcome> {
     const payload: SystemOneRequestPayload = { ...request, model: transport.model };
-    const body = JSON.stringify(payload);
+    const requestBody = JSON.stringify(payload);
     let attempt = 0;
     for (;;) {
         // Checked before the attempt, so a cancellation already in force does not make a request, whatever
@@ -286,22 +286,22 @@ export async function send(
                     Accept: "application/json",
                     "Content-Type": "application/json",
                 },
-                body,
+                body: requestBody,
                 signal: attemptSignal,
                 // Node's fetch returns the 3xx itself under "manual", and Gate 1 refuses it.
                 redirect: "manual",
             });
-        } catch (err: unknown) {
+        } catch (error: unknown) {
             // A caller abort is the invocation's total budget and is final; a per-attempt timeout or a transport
             // fault may retry.
             if (signal.aborted) {
-                throw new DecideError(ErrorCode.deadline, "the invocation was cancelled", {}, { cause: err });
+                throw new DecideError(ErrorCode.deadline, "the invocation was cancelled", {}, { cause: error });
             }
             if (attempt >= maxRetries) {
-                if (errorName(err) === "TimeoutError") {
-                    throw new DecideError(ErrorCode.deadline, `no answer within ${timeoutMs}ms per attempt`, { timeoutMs }, { cause: err });
+                if (errorNameOf(error) === "TimeoutError") {
+                    throw new DecideError(ErrorCode.deadline, `no answer within ${timeoutMs}ms per attempt`, { timeoutMs }, { cause: error });
                 }
-                throw providerError("the provider could not be reached", { class: errorName(err) });
+                throw providerError("the provider could not be reached", { class: errorNameOf(error) });
             }
             await sleep(retryDelayMs(attempt, new Headers()), signal);
             attempt += 1;
@@ -310,9 +310,9 @@ export async function send(
         // Gate 1: the status. A body that is not a 200 does not reach the result path.
         if (response.status !== 200) {
             if (isRetryableStatus(response.status) && attempt < maxRetries) {
-                const delay = retryDelayMs(attempt, response.headers);
+                const delayMs = retryDelayMs(attempt, response.headers);
                 await response.body?.cancel();
-                await sleep(delay, signal);
+                await sleep(delayMs, signal);
                 attempt += 1;
                 continue;
             }
@@ -320,18 +320,18 @@ export async function send(
         }
         // Gate 2: the content type. Anything but JSON is refused with the body unread.
         const contentType = response.headers.get("content-type") ?? "";
-        if (!JSON_CONTENT_TYPE.test(contentType)) {
+        if (!JSON_CONTENT_TYPE_PATTERN.test(contentType)) {
             await response.body?.cancel();
             throw contractError("the answer is not JSON", { contentType: contentType.slice(0, MAX_SNIPPET_CHARS) });
         }
         // Gate 3: the size cap, then the parse, then the projection.
-        const text = await readCapped(response);
+        const responseText = await readCapped(response);
         let parsed: unknown;
         try {
-            parsed = JSON.parse(text, noProtoKeys) as unknown;
-        } catch (err: unknown) {
-            throw contractError("the answer is not valid JSON", { class: errorName(err) });
+            parsed = JSON.parse(responseText, dropPrototypeKeys) as unknown;
+        } catch (error: unknown) {
+            throw contractError("the answer is not valid JSON", { class: errorNameOf(error) });
         }
-        return { data: projectResult(parsed, expectedIds, kind, options), requestId: requestIdOf(response.headers), retries: attempt };
+        return { data: projectResult(parsed, expectedIds, kind, choiceOptions), requestId: requestIdOf(response.headers), retries: attempt };
     }
 }
