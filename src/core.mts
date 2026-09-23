@@ -10,11 +10,9 @@
 import { makeTransport, send } from "./transport.mjs";
 import type { TypeSafeTransport } from "./transport.mjs";
 import type { TypeSafeConfig } from "./config.mjs";
-// Type only, erased on emit: the request this loop builds is held to the provider's published body shape.
-import type { SystemOneRequestPayload } from "@typesafe-ai/sdk";
 import { DecideError, ErrorCode, inputError } from "./errors.mjs";
 import { isNonNegativeInteger, isProbability, isRecord } from "./validation.mjs";
-import type { ChoiceAnswer, FilterParams, FilterTemplate, Item, NoulAnswer, TriageParams, TriageTemplate } from "./templates.mjs";
+import type { AnswerKind, ChoiceAnswer, ChoiceOptions, ChunkRequest, FilterParams, FilterTemplate, Item, NoulAnswer, TriageParams, TriageTemplate } from "./templates.mjs";
 
 /**
  * Every bound one invocation obeys. They are values in this file rather than configuration keys: a bound guards
@@ -143,7 +141,7 @@ export function normalizeItems(items: readonly Item[]): Normalized {
             throw inputError(`item '${item.id}' carries a Unicode tag character -- invisible to a reader and text to the model`, { id: item.id });
         }
         if (itemFields.some((field) => INVISIBLE_FORMATTING.test(field))) invisibleItemCount++;
-        if (item.text.length > LIMITS.maxItemChars || (item.rule?.length ?? 0) > LIMITS.maxItemChars || (item.context?.length ?? 0) > LIMITS.maxItemChars) cutItemCount++;
+        if (itemFields.some((field) => field.length > LIMITS.maxItemChars)) cutItemCount++;
         const normalizedItem: { id: string; text: string; rule?: string; context?: string } = { id: item.id, text: truncateText(item.text, LIMITS.maxItemChars) };
         if (item.rule !== undefined && item.rule !== "") normalizedItem.rule = truncateText(item.rule, LIMITS.maxItemChars);
         if (item.context !== undefined && item.context !== "") normalizedItem.context = truncateText(item.context, LIMITS.maxItemChars);
@@ -171,16 +169,13 @@ export function chunkItems(items: readonly Item[]): Item[][] {
     return chunks;
 }
 
-/** A response that passed the contract. */
-export interface ValidResult<TAnswer> {
-    readonly model: string;
-    readonly answers: Readonly<Record<string, TAnswer>>;
-    readonly inputTokens: number;
-    readonly outputTokens: number;
-}
+/** How far the probabilities of a choice answer may sum from 1 and still hold the contract. */
+const PROBABILITY_SUM_TOLERANCE = 0.02;
+/** Floating-point slack when the chosen option's probability is compared with the highest one. */
+const FLOAT_EPSILON = 1e-6;
 
 /** Every way `result` departs from the documented shape for `kind`; empty when the contract holds. */
-export function contractProblems(result: unknown, expectedIds: readonly string[], kind: "noul" | "choice", choiceOptions: Readonly<Record<string, string>> | null): string[] {
+export function contractProblems(result: unknown, expectedIds: readonly string[], kind: AnswerKind, choiceOptions: ChoiceOptions | null): string[] {
     const problems: string[] = [];
     if (!isRecord(result)) return ["result is not an object"];
     if (typeof result["model"] !== "string" || result["model"] === "") problems.push("model is not a string");
@@ -191,35 +186,43 @@ export function contractProblems(result: unknown, expectedIds: readonly string[]
     const answeredIds = new Set(Object.keys(answers));
     for (const id of expectedIds) if (!answeredIds.has(id)) problems.push(`answer for '${id}' is missing`);
     for (const id of answeredIds) if (!expectedIds.includes(id)) problems.push(`unexpected answer '${id}'`);
+    const optionNames = Object.keys(choiceOptions ?? {});
     for (const id of expectedIds) {
         const answer = answers[id];
         if (!isRecord(answer)) { problems.push(`answer '${id}' is not an object`); continue; }
         if (answer["type"] !== kind) problems.push(`answer '${id}' has type '${String(answer["type"])}', expected '${kind}'`);
-        if (kind === "noul") {
-            if (!isProbability(answer["noul"])) problems.push(`answer '${id}'.noul is not in [0,1]`);
-            continue;
-        }
-        const optionNames = Object.keys(choiceOptions ?? {});
-        const chosenOption = answer["choice"];
-        if (typeof chosenOption !== "string" || !optionNames.includes(chosenOption)) problems.push(`answer '${id}'.choice '${String(chosenOption)}' is not an option`);
-        if (!isProbability(answer["confidence"])) problems.push(`answer '${id}'.confidence is not in [0,1]`);
-        const probabilities = answer["probabilities"];
-        if (!isRecord(probabilities)) { problems.push(`answer '${id}'.probabilities missing`); continue; }
-        const probabilityNames = Object.keys(probabilities);
-        if (probabilityNames.length !== optionNames.length || !optionNames.every((optionName) => probabilityNames.includes(optionName))) problems.push(`answer '${id}'.probabilities keys differ from the options`);
-        let probabilitySum = 0;
-        let highestProbability = -1;
-        for (const optionName of probabilityNames) {
-            const probability = probabilities[optionName];
-            if (!isProbability(probability)) { problems.push(`answer '${id}'.probabilities.${optionName} not in [0,1]`); continue; }
-            probabilitySum += probability;
-            if (probability > highestProbability) highestProbability = probability;
-        }
-        if (Math.abs(probabilitySum - 1) > 0.02) problems.push(`answer '${id}'.probabilities sum to ${probabilitySum.toFixed(3)}`);
-        if (typeof chosenOption === "string") {
-            const chosenProbability = probabilities[chosenOption];
-            if (isProbability(chosenProbability) && chosenProbability < highestProbability - 1e-6) problems.push(`answer '${id}'.choice is not the highest-probability option`);
-        }
+        problems.push(...(kind === "noul" ? noulAnswerProblems(id, answer) : choiceAnswerProblems(id, answer, optionNames)));
+    }
+    return problems;
+}
+
+/** Every way the noul answer for `id` departs from its documented shape. */
+function noulAnswerProblems(id: string, answer: Record<string, unknown>): string[] {
+    return isProbability(answer["noul"]) ? [] : [`answer '${id}'.noul is not in [0,1]`];
+}
+
+/** Every way the choice answer for `id` departs from its documented shape over `optionNames`. */
+function choiceAnswerProblems(id: string, answer: Record<string, unknown>, optionNames: readonly string[]): string[] {
+    const problems: string[] = [];
+    const chosenOption = answer["choice"];
+    if (typeof chosenOption !== "string" || !optionNames.includes(chosenOption)) problems.push(`answer '${id}'.choice '${String(chosenOption)}' is not an option`);
+    if (!isProbability(answer["confidence"])) problems.push(`answer '${id}'.confidence is not in [0,1]`);
+    const probabilities = answer["probabilities"];
+    if (!isRecord(probabilities)) return [...problems, `answer '${id}'.probabilities missing`];
+    const probabilityNames = Object.keys(probabilities);
+    if (probabilityNames.length !== optionNames.length || !optionNames.every((optionName) => probabilityNames.includes(optionName))) problems.push(`answer '${id}'.probabilities keys differ from the options`);
+    let probabilitySum = 0;
+    let highestProbability = -1;
+    for (const optionName of probabilityNames) {
+        const probability = probabilities[optionName];
+        if (!isProbability(probability)) { problems.push(`answer '${id}'.probabilities.${optionName} not in [0,1]`); continue; }
+        probabilitySum += probability;
+        if (probability > highestProbability) highestProbability = probability;
+    }
+    if (Math.abs(probabilitySum - 1) > PROBABILITY_SUM_TOLERANCE) problems.push(`answer '${id}'.probabilities sum to ${probabilitySum.toFixed(3)}`);
+    if (typeof chosenOption === "string") {
+        const chosenProbability = probabilities[chosenOption];
+        if (isProbability(chosenProbability) && chosenProbability < highestProbability - FLOAT_EPSILON) problems.push(`answer '${id}'.choice is not the highest-probability option`);
     }
     return problems;
 }
@@ -230,7 +233,7 @@ export function makeClient(config: TypeSafeConfig, fetchFunction?: typeof fetch)
 }
 
 /** The transport reports every failure as a DecideError; anything else reaching here is a defect and is rethrown. */
-export function classifyFailure(error: unknown): DecideError {
+export function asDecideError(error: unknown): DecideError {
     if (error instanceof DecideError) return error;
     if (error instanceof Error) throw error;
     throw new Error(String(error));
@@ -246,10 +249,10 @@ interface RunOptions {
 
 async function runChunks<TAnswer>(
     client: TypeSafeTransport,
-    kind: "noul" | "choice",
-    choiceOptions: Readonly<Record<string, string>> | null,
+    kind: AnswerKind,
+    choiceOptions: ChoiceOptions | null,
     chunks: readonly (readonly Item[])[],
-    buildRequest: (chunk: readonly Item[]) => Omit<SystemOneRequestPayload, "model">,
+    buildRequest: (chunk: readonly Item[]) => ChunkRequest,
     runOptions: RunOptions,
 ): Promise<{ answers: Record<string, TAnswer>; requests: RequestRecord[] }> {
     const invocationController = new AbortController();
@@ -277,7 +280,7 @@ async function runChunks<TAnswer>(
                     maxRetries: LIMITS.maxRetries,
                 });
             } catch (error) {
-                throw classifyFailure(error);
+                throw asDecideError(error);
             }
             const elapsedMs = Date.now() - startedAt;
             const problems = contractProblems(sendOutcome.data, itemIds, kind, choiceOptions);
@@ -315,7 +318,7 @@ interface ValidResultWire<TAnswer> {
 export async function decideFilter(client: TypeSafeTransport, template: FilterTemplate, rawItems: readonly Item[], params: FilterParams, runOptions: RunOptions = {}): Promise<Decision<NoulRow>> {
     const { items, cut: cutItemCount, invisible: invisibleItemCount } = normalizeItems(rawItems);
     const chunks = chunkItems(items);
-    const buildRequest = (chunk: readonly Item[]): Omit<SystemOneRequestPayload, "model"> => ({
+    const buildRequest = (chunk: readonly Item[]): ChunkRequest => ({
         state: template.buildState(chunk, params),
         questions: Object.fromEntries(chunk.map((item) => [item.id, template.buildQuestion(item)])),
     });
@@ -337,7 +340,7 @@ export async function decideFilter(client: TypeSafeTransport, template: FilterTe
 export async function decideTriage(client: TypeSafeTransport, template: TriageTemplate, rawItems: readonly Item[], params: TriageParams, runOptions: RunOptions = {}): Promise<Decision<ChoiceRow>> {
     const { items, cut: cutItemCount, invisible: invisibleItemCount } = normalizeItems(rawItems);
     const chunks = chunkItems(items);
-    const buildRequest = (chunk: readonly Item[]): Omit<SystemOneRequestPayload, "model"> => ({
+    const buildRequest = (chunk: readonly Item[]): ChunkRequest => ({
         state: template.buildState(chunk, params),
         questions: Object.fromEntries(chunk.map((item) => [item.id, template.buildQuestion(item)])),
     });

@@ -39,8 +39,8 @@ interface Args {
     readonly task: string;
     readonly format: Format;
     readonly threshold: number | undefined;
-    readonly config: string | undefined;
-    readonly usageLog: string | undefined;
+    readonly configPath: string | undefined;
+    readonly usageLogPath: string | undefined;
     readonly help: boolean;
     readonly version: boolean;
 }
@@ -50,8 +50,8 @@ function parseArgs(argv: readonly string[]): Args {
     let task = "";
     let format: Format = "lines";
     let threshold: number | undefined;
-    let config: string | undefined;
-    let usageLog: string | undefined;
+    let configPath: string | undefined;
+    let usageLogPath: string | undefined;
     let help = false;
     let version = false;
     const readOptionValue = (flag: string, flagIndex: number): string => {
@@ -86,10 +86,10 @@ function parseArgs(argv: readonly string[]): Args {
                 break;
             }
             case "--config":
-                config = readOptionValue(arg, argIndex++);
+                configPath = readOptionValue(arg, argIndex++);
                 break;
             case "--usage-log":
-                usageLog = readOptionValue(arg, argIndex++);
+                usageLogPath = readOptionValue(arg, argIndex++);
                 break;
             default:
                 if (arg.startsWith("-")) throw inputError(`unknown option '${arg}'`);
@@ -97,7 +97,7 @@ function parseArgs(argv: readonly string[]): Args {
                 template = arg;
         }
     }
-    return { template, task, format, threshold, config, usageLog, help, version };
+    return { template, task, format, threshold, configPath, usageLogPath, help, version };
 }
 
 /**
@@ -165,10 +165,10 @@ async function main(argv: readonly string[]): Promise<number> {
     if (args.task.trim() === "") throw inputError("filter needs --task \"<one sentence>\"");
     if (args.task.length > MAX_TASK_CHARS) throw inputError(`--task is ${args.task.length} chars; the bound is ${MAX_TASK_CHARS}`);
 
-    if (args.config === undefined || args.config === "") {
+    if (args.configPath === undefined || args.configPath === "") {
         throw configurationError("--config <file> is required -- it names the file holding the API key; run --help for the options");
     }
-    const config = readConfig(args.config);
+    const config = readConfig(args.configPath);
     const { items, setAside } = parse(args.format, readStdin());
     if (items.length === 0) throw inputError("the listing on stdin is empty");
     if (items.length > LIMITS.maxItems) {
@@ -192,13 +192,13 @@ async function main(argv: readonly string[]): Promise<number> {
         );
     } catch (error) {
         const decideError = error instanceof DecideError ? error : null;
-        appendUsageLine(args.usageLog, { template: "filter", items: items.length, outcome: decideError ? decideError.code : "unexpected", elapsedMs: Date.now() - startedAt });
+        appendUsageLine(args.usageLogPath, { template: "filter", items: items.length, outcome: decideError ? decideError.code : "unexpected", elapsedMs: Date.now() - startedAt });
         throw error;
     }
     const textById = new Map(items.map((item) => [item.id, item.text]));
     for (const row of decision.kept) process.stdout.write(`${textById.get(row.id) ?? row.id}\n`);
     process.stdout.write(`${formatSummaryLine(decision, setAside, args.format)}\n`);
-    appendUsageLine(args.usageLog, {
+    appendUsageLine(args.usageLogPath, {
         template: "filter",
         items: decision.total,
         kept: decision.kept.length,

@@ -9,7 +9,7 @@
 // Types only, erased on emit. `makeNoulQuestion` and `makeChoiceQuestion` build the provider's own two-field object literals here, so the
 // shipped JavaScript does not import the SDK; their return types bind them to the published declarations, so a
 // release that changes what a question carries fails the build. See transport.mts for the rest of the drift binding.
-import type { ChoiceQuestion as SdkChoiceQuestion, EntryType, NoulQuestion as SdkNoulQuestion } from "@typesafe-ai/sdk";
+import type { ChoiceQuestion as SdkChoiceQuestion, EntryType, NoulQuestion as SdkNoulQuestion, SystemOneRequestPayload } from "@typesafe-ai/sdk";
 import { truncateText } from "./core.mjs";
 
 export const TEMPLATE_VERSION = 2;
@@ -29,6 +29,13 @@ export type Item = {
     readonly rule?: string;
     readonly context?: string;
 };
+
+/** The two answer shapes the provider returns: a probability (`noul`) or a label from the options (`choice`). */
+export type AnswerKind = "noul" | "choice";
+/** A choice template's options: each label mapped to the description that selects it. */
+export type ChoiceOptions = Readonly<Record<string, string>>;
+/** One request as a template builds it; the transport adds the model the configuration pins. */
+export type ChunkRequest = Omit<SystemOneRequestPayload, "model">;
 
 export type NoulQuestion = SdkNoulQuestion;
 export type ChoiceQuestion = SdkChoiceQuestion;
@@ -60,7 +67,7 @@ export interface TriageParams {
 interface TemplateBase<TQuestion, TAnswer, TParams> {
     readonly name: string;
     readonly kind: TAnswer extends NoulAnswer ? "noul" : "choice";
-    readonly options: Readonly<Record<string, string>> | null;
+    readonly options: ChoiceOptions | null;
     /** The `state` the request carries, in the provider's own JSON-value vocabulary. */
     buildState(items: readonly Item[], params: TParams): EntryType;
     buildQuestion(item: Item): TQuestion;
@@ -103,7 +110,7 @@ export const filter: FilterTemplate = {
 };
 
 /** The triage options use tokens that do not occur in prose, so an excerpt cannot name one as a directive. */
-export const TRIAGE_OPTIONS: Readonly<Record<string, string>> = {
+export const TRIAGE_OPTIONS: ChoiceOptions = {
     rewrite: "The flagged text is a genuine instance of what the rule describes, and none of the rule's stated exemptions applies: a rewrite of the sentence from its source is due.",
     keep: "The flagged text is a case the rule's stated exemptions cover, a labelled off-style example, a quoted term, or a command or literal.",
     open: "The excerpt alone does not settle it; a reader has to open the file.",

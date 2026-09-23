@@ -20,6 +20,7 @@
 import { DecideError, ErrorCode } from "./errors.mjs";
 import type { TypeSafeConfig } from "./config.mjs";
 import { isModelName, isNonNegativeInteger, isProbability, isRecord } from "./validation.mjs";
+import type { AnswerKind, ChoiceOptions, ChunkRequest } from "./templates.mjs";
 // Types only, erased on emit, so the shipped JavaScript does not import the SDK. The provider publishes its wire
 // contract as TypeScript declarations, and binding to them turns a change in it into a compile error on the next
 // build instead of a refusal in production. `package.json` tracks the SDK at ^0.6.0 for exactly that.
@@ -87,8 +88,8 @@ export interface SendOutcome {
 
 export interface SendOptions {
     readonly expectedIds: readonly string[];
-    readonly kind: "noul" | "choice";
-    readonly options: Readonly<Record<string, string>> | null;
+    readonly kind: AnswerKind;
+    readonly options: ChoiceOptions | null;
     readonly signal: AbortSignal;
     readonly timeoutMs: number;
     readonly maxRetries: number;
@@ -180,7 +181,7 @@ const dropPrototypeKeys = (key: string, value: unknown): unknown =>
     key === "__proto__" || key === "constructor" || key === "prototype" ? undefined : value;
 
 /** One answer, reduced to the fields its kind documents. A field that fails its predicate is dropped, not coerced. */
-function projectAnswer(rawAnswer: unknown, kind: "noul" | "choice", optionNames: readonly string[]): Record<string, unknown> {
+function projectAnswer(rawAnswer: unknown, kind: AnswerKind, optionNames: readonly string[]): Record<string, unknown> {
     const projectedAnswer: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
     if (ownProperty(rawAnswer, "type") === kind) projectedAnswer["type"] = kind;
     if (kind === "noul") {
@@ -211,8 +212,8 @@ function projectAnswer(rawAnswer: unknown, kind: "noul" | "choice", optionNames:
 function projectResult(
     rawResult: unknown,
     expectedIds: readonly string[],
-    kind: "noul" | "choice",
-    choiceOptions: Readonly<Record<string, string>> | null,
+    kind: AnswerKind,
+    choiceOptions: ChoiceOptions | null,
 ): ProjectedResult {
     if (!isRecord(rawResult)) throw contractError("the answer is not an object");
     const optionNames = Object.keys(choiceOptions ?? {});
@@ -263,7 +264,7 @@ async function failureFor(response: Response): Promise<DecideError> {
  */
 export async function send(
     transport: TypeSafeTransport,
-    request: Omit<SystemOneRequestPayload, "model">,
+    request: ChunkRequest,
     { expectedIds, kind, options: choiceOptions, signal, timeoutMs, maxRetries }: SendOptions,
 ): Promise<SendOutcome> {
     const payload: SystemOneRequestPayload = { ...request, model: transport.model };
