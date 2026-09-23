@@ -43,10 +43,14 @@ jobs:
       - name: Check the tag against the package version
         run: |
           set -euo pipefail
+          # Exact match, prerelease suffix included: a v0.2.0-rc1 tag wants 0.2.0-rc1 in the
+          # manifest. Comparing the x.y.z core alone would let an rc build call itself the
+          # release, and the manifest is the one place the version is written down.
           tag="${GITHUB_REF_NAME#v}"
           pkg="$(node -p 'require("./package.json").version')"
           if [[ "${tag}" != "${pkg}" ]]; then
-              printf 'tag %s does not match package.json version %s\n' "${tag}" "${pkg}" >&2
+              printf 'tag %s does not match package.json version %s -- set the manifest to %s, suffix and all\n' \
+                  "${GITHUB_REF_NAME}" "${pkg}" "${tag}" >&2
               exit 1
           fi
 
@@ -55,7 +59,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          asset="typesafe-client-js-${GITHUB_REF_NAME}.tar.gz"
+          # `dist` in the name, and the tag's own `v`, keep this apart from the source
+          # archives GitHub attaches to every release: it names those for the tag with its
+          # leading `v` stripped, so typesafe-client-js-0.1.0.tar.gz sits beside this one
+          # carrying src/ rather than the build. A consumer pins an asset by name, and
+          # without the qualifier the two are one character apart.
+          asset="typesafe-client-js-dist-${GITHUB_REF_NAME}.tar.gz"
           # Reproducible: sorted entries, no owner, no gzip timestamp, and every mtime set
           # to the tagged commit's own date, so the same tag builds to the same bytes and
           # the checksum this step writes is a claim a reader can re-check. A fixed date would do the
@@ -67,5 +76,11 @@ jobs:
               --pax-option=exthdr.name=%d/PaxHeaders/%f,delete=atime,delete=ctime \
               -C dist -cf - . | gzip -n > "${asset}"
           sha256sum "${asset}" > "${asset}.sha256"
+          # Semver reads anything after the first `-` as a prerelease, so v0.2.0-rc1 is
+          # published as one and does not become the release a consumer is offered as latest.
+          prerelease=()
+          case "${GITHUB_REF_NAME}" in
+              *-*) prerelease=(--prerelease) ;;
+          esac
           gh release create "${GITHUB_REF_NAME}" "${asset}" "${asset}.sha256" \
-              --verify-tag --generate-notes
+              --verify-tag --generate-notes "${prerelease[@]}"
