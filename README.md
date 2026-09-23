@@ -81,9 +81,10 @@ listing reaches the host it names.
 
 `src/defaults.mts` holds the fallback for each of those keys and no other
 code, and `config.mts` imports them from there, so the values an operator
-may change are one file rather than a search. The request bounds are deliberately not among them: the chunk size,
-the item cut and the state budget are chosen against each other, and they
-stay in `core.mts` with the code that reads them.
+may change are one file rather than a search. The request bounds are
+deliberately not among them: the chunk size, the item cut and the state
+budget are chosen against each other, and they stay in `core.mts` with the
+code that reads them.
 
 ## How a call runs
 
@@ -145,16 +146,34 @@ input bound rather than buffered whole, every parser pattern runs in time
 linear in the line, a `path:line` id is taken only where it is well-formed
 and not yet taken (a second finding on the same line keeps its line as
 `L<n>`), and the one stderr line is rendered with every control character
-from an input or a body replaced, so nothing quoted in it can add a line or
+from an input or a body replaced, so text quoted in it cannot add a line or
 style a terminal.
 
 ## Using the build output
 
-Each tagged release carries `dist/` as a tarball with its `sha256`. A
-consumer vendors that at a pinned tag and verifies the checksum: the output
-is small enough to read, so the code that runs is the code that was
-reviewed, and `npm run build` reproduces it from the tag for anyone
-checking. The project does not publish to a package registry yet.
+Each tagged release carries `dist/` as a tarball with its `sha256` and a
+detached signature. A consumer vendors that at a pinned tag: the output is
+small enough to read, so the code that runs is the code that was reviewed,
+and `npm run build` reproduces it from the tag for anyone checking. The
+project does not publish to a package registry yet.
+
+```bash
+curl -fsSO https://rpm.dagnode.com/RPM-GPG-KEY-dag-node
+gpg --import RPM-GPG-KEY-dag-node
+sha256sum -c typesafe-client-js-dist-v0.1.0.tar.gz.sha256
+gpg --verify typesafe-client-js-dist-v0.1.0.tar.gz.asc typesafe-client-js-dist-v0.1.0.tar.gz
+```
+
+The key is published on `dagnode.com` rather than attached to the release,
+so it does not travel with what it signs. Check the imported key against
+this fingerprint:
+
+```text
+67F4 2DC1 8BF7 64B4 2D82  F142 56D2 F802 CF98 32E4
+```
+
+`node dist/decide.mjs --version` prints the release a vendored copy came
+from, for a host where the tarball and its tag are no longer at hand.
 
 ## Licence
 
