@@ -27,7 +27,7 @@ import { appendFileSync, readSync } from "node:fs";
 import { readConfig } from "./config.mjs";
 import { decideFilter, LIMITS, makeClient, type Decision, type NoulRow, type RequestRecord } from "./core.mjs";
 import { DecideError, inputError, configurationError, oneLine } from "./errors.mjs";
-import { USAGE } from "./help.mjs";
+import { USAGE, VERSION } from "./help.mjs";
 import { FORMATS, parse, type Format } from "./parsers.mjs";
 import { filter, MAX_TASK_CHARS, TEMPLATE_VERSION } from "./templates.mjs";
 
@@ -39,6 +39,7 @@ interface Args {
     readonly config: string | undefined;
     readonly usageLog: string | undefined;
     readonly help: boolean;
+    readonly version: boolean;
 }
 
 function parseArgs(argv: readonly string[]): Args {
@@ -49,6 +50,7 @@ function parseArgs(argv: readonly string[]): Args {
     let config: string | undefined;
     let usageLog: string | undefined;
     let help = false;
+    let version = false;
     const next = (flag: string, i: number): string => {
         const v = argv[i + 1];
         if (v === undefined) throw inputError(`${flag} needs a value`);
@@ -60,6 +62,10 @@ function parseArgs(argv: readonly string[]): Args {
             case "--help":
             case "-h":
                 help = true;
+                break;
+            case "--version":
+            case "-v":
+                version = true;
                 break;
             case "--task":
                 task = next(arg, i++);
@@ -88,7 +94,7 @@ function parseArgs(argv: readonly string[]): Args {
                 template = arg;
         }
     }
-    return { template, task, format, threshold, config, usageLog, help };
+    return { template, task, format, threshold, config, usageLog, help, version };
 }
 
 /**
@@ -132,7 +138,7 @@ function summary(decision: Decision<NoulRow>, setAside: number, format: Format):
 function usageLine(path: string | undefined, fields: Record<string, string | number | null | readonly string[]>): void {
     if (path === undefined || path === "") return;
     try {
-        appendFileSync(path, `${JSON.stringify({ ts: new Date().toISOString(), templateVersion: TEMPLATE_VERSION, ...fields })}\n`);
+        appendFileSync(path, `${JSON.stringify({ ts: new Date().toISOString(), version: VERSION, templateVersion: TEMPLATE_VERSION, ...fields })}\n`);
     } catch {
         // The usage log is cost accounting. A path the command fails to open costs the line and leaves the result.
     }
@@ -140,6 +146,12 @@ function usageLine(path: string | undefined, fields: Record<string, string | num
 
 async function main(argv: readonly string[]): Promise<number> {
     const args = parseArgs(argv);
+    // Before every other check: asking which build this is has to answer on a host where no
+    // configuration exists, which is the state that raises the question.
+    if (args.version) {
+        process.stdout.write(`typesafe-client-js ${VERSION}\n`);
+        return 0;
+    }
     if (args.help) {
         process.stdout.write(`${USAGE}\n`);
         return 0;

@@ -53,6 +53,26 @@ if [[ ${rc} -eq 0 && "${out}" == usage:* && "${out}" == *"exit: 0 result, 2 inpu
 else
     fail "--help: rc=${rc} out='$(head -c 120 <<<"${out}")'"
 fi
+
+# --version answers on a host holding no configuration, which is the state that raises the
+# question of which build this is, so it is checked before every other argument.
+for flag in --version -v; do
+    run "" "${flag}"
+    if [[ ${rc} -eq 0 && "${out}" == "typesafe-client-js "* && -z "${err}" ]]; then
+        pass "${flag} prints the client version and exits 0"
+    else
+        fail "${flag}: rc=${rc} out='${out}' err='$(head -c 120 <<<"${err}")'"
+    fi
+done
+# The version is written in two places, so the suite holds them to each other: a release
+# cannot ship an artifact whose version disagrees with its own manifest.
+pkg_version="$(node -p "require('${ROOT}/package.json').version")"
+src_version="$(node -e "import('${DIR}/help.mjs').then((m) => process.stdout.write(m.VERSION))")"
+if [[ "${pkg_version}" == "${src_version}" ]]; then
+    pass "the version in help.mts matches package.json (${pkg_version})"
+else
+    fail "help.mts VERSION is ${src_version}, package.json is ${pkg_version}"
+fi
 run "x" ; expect_refusal "no template" 2 input
 run "x" triage; expect_refusal "the deferred triage template" 2 input
 run "x" nonsense; expect_refusal "an unknown template" 2 input

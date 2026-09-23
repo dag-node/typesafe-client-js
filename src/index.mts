@@ -29,6 +29,7 @@ export {
     type RequestRecord,
 } from "./core.mjs";
 export { DecideError, ErrorCode, EXIT_STATUS } from "./errors.mjs";
+export { USAGE, VERSION } from "./help.mjs";
 export { FORMATS, parse, type Format } from "./parsers.mjs";
 export {
     filter,
