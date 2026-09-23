@@ -1,6 +1,6 @@
 {
   "name": "@dagnode/typesafe-client",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Minimal, unofficial TypeScript client for the TypeSafe System One API, compiled to plain ESM with no runtime dependency.",
   "license": "MIT",
