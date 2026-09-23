@@ -13,6 +13,7 @@ import type { TypeSafeConfig } from "./config.mjs";
 // Type only, erased on emit: the request this loop builds is held to the provider's published body shape.
 import type { SystemOneRequestPayload } from "@typesafe-ai/sdk";
 import { DecideError, ErrorCode, inputError } from "./errors.mjs";
+import { isNonNegativeInteger, isProbability, isRecord } from "./validation.mjs";
 import type { ChoiceAnswer, FilterParams, FilterTemplate, Item, NoulAnswer, TriageParams, TriageTemplate } from "./templates.mjs";
 
 /**
@@ -114,7 +115,8 @@ const INVISIBLE_FORMATTING = /[\u200b-\u200d\u202a-\u202e\u2060-\u2064\u2066-\u2
 export function isItemId(id: string): boolean {
     return ITEM_ID_PATTERN.test(id) && !RESERVED_ITEM_IDS.has(id);
 }
-const truncateText = (text: string, maxChars: number): string => (text.length <= maxChars ? text : `${text.slice(0, maxChars)} [...cut at ${maxChars} chars]`);
+/** `text` whole when it fits in `maxChars`, else its first `maxChars` characters and a marker naming the cut. */
+export const truncateText = (text: string, maxChars: number): string => (text.length <= maxChars ? text : `${text.slice(0, maxChars)} [...cut at ${maxChars} chars]`);
 
 /** The items as sent, and how many carried a field the item bound cut. */
 export interface Normalized {
@@ -168,10 +170,6 @@ export function chunkItems(items: readonly Item[]): Item[][] {
     if (currentChunk.length > 0) chunks.push(currentChunk);
     return chunks;
 }
-
-const isProbability = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
-const isNonNegativeInteger = (value: unknown): value is number => Number.isInteger(value) && (value as number) >= 0;
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** A response that passed the contract. */
 export interface ValidResult<TAnswer> {

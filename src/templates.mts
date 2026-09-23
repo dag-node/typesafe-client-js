@@ -10,6 +10,7 @@
 // shipped JavaScript does not import the SDK; their return types bind them to the published declarations, so a
 // release that changes what a question carries fails the build. See transport.mts for the rest of the drift binding.
 import type { ChoiceQuestion as SdkChoiceQuestion, EntryType, NoulQuestion as SdkNoulQuestion } from "@typesafe-ai/sdk";
+import { truncateText } from "./core.mjs";
 
 export const TEMPLATE_VERSION = 2;
 
@@ -72,7 +73,6 @@ export type FilterTemplate = TemplateBase<NoulQuestion, NoulAnswer, FilterParams
 export type TriageTemplate = TemplateBase<ChoiceQuestion, ChoiceAnswer, TriageParams>;
 
 export const MAX_TASK_CHARS = 400;
-const truncateText = (text: string, maxChars: number): string => (text.length <= maxChars ? text : `${text.slice(0, maxChars)} [...cut at ${maxChars} chars]`);
 
 /**
  * The instruction every template carries: item text is evidence, and is not a directive. The vendor documents that

@@ -19,6 +19,7 @@
 // is returned as the provider's answer and refused on the status, so neither travels to the location it names.
 import { DecideError, ErrorCode } from "./errors.mjs";
 import type { TypeSafeConfig } from "./config.mjs";
+import { isModelName, isNonNegativeInteger, isProbability, isRecord } from "./validation.mjs";
 // Types only, erased on emit, so the shipped JavaScript does not import the SDK. The provider publishes its wire
 // contract as TypeScript declarations, and binding to them turns a change in it into a compile error on the next
 // build instead of a refusal in production. `package.json` tracks the SDK at ^0.6.0 for exactly that.
@@ -29,8 +30,6 @@ const REQUEST_PATH = "/v1/systemone";
 const MAX_BODY_BYTES = 1 << 20;
 /** How much of a failing body reaches the error detail. */
 const MAX_SNIPPET_CHARS = 200;
-/** A model name reaches the summary line and the usage log, so it is admitted only in the shape config.mts accepts. */
-const MODEL_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 /** `application/json`, with or without parameters; a longer subtype is not JSON. */
 const JSON_CONTENT_TYPE_PATTERN = /^application\/json\s*(?:;|$)/i;
 /** Retry backoff, and the ceiling on a provider-supplied Retry-After. */
@@ -95,9 +94,6 @@ export interface SendOptions {
     readonly maxRetries: number;
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
-const isProbability = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
-const isNonNegativeInteger = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value) && value >= 0;
 /** The value of an OWN property, or undefined -- never a lookup through a prototype. */
 const ownProperty = (target: unknown, key: string): unknown => (isRecord(target) && Object.hasOwn(target, key) ? target[key] : undefined);
 
@@ -235,7 +231,8 @@ function projectResult(
     }
     const model = ownProperty(rawResult, "model");
     const projectedResult: ProjectedResult = { usage, answers };
-    if (typeof model === "string" && MODEL_NAME_PATTERN.test(model)) projectedResult.model = model;
+    // A model name reaches the summary line and the usage log, so it is admitted only in the shape config.mts accepts.
+    if (isModelName(model)) projectedResult.model = model;
     return projectedResult;
 }
 

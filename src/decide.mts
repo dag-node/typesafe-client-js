@@ -32,6 +32,7 @@ import { DecideError, inputError, configurationError, oneLine } from "./errors.m
 import { USAGE, VERSION } from "./help.mjs";
 import { FORMATS, parse, type Format } from "./parsers.mjs";
 import { filter, MAX_TASK_CHARS, TEMPLATE_VERSION } from "./templates.mjs";
+import { isProbability } from "./validation.mjs";
 
 interface Args {
     readonly template: string;
@@ -80,7 +81,7 @@ function parseArgs(argv: readonly string[]): Args {
             }
             case "--threshold": {
                 const thresholdValue = Number(readOptionValue(arg, argIndex++));
-                if (!Number.isFinite(thresholdValue) || thresholdValue < 0 || thresholdValue > 1) throw inputError("--threshold must be a number between 0 and 1");
+                if (!isProbability(thresholdValue)) throw inputError("--threshold must be a number between 0 and 1");
                 threshold = thresholdValue;
                 break;
             }

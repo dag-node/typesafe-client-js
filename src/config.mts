@@ -30,12 +30,12 @@ import {
     DEFAULT_UNCERTAIN_BAND,
 } from "./defaults.mjs";
 import { configurationError } from "./errors.mjs";
+import { isModelName, isProbability } from "./validation.mjs";
 
 /** The largest file read. A configuration past it is refused rather than parsed from a prefix. */
 const MAX_CONFIG_BYTES = 64 * 1024;
 const KEY_MIN_CHARS = 8;
 const KEY_MAX_CHARS = 512;
-const MODEL_MAX_CHARS = 128;
 const HOSTNAME_MAX_CHARS = 253;
 const URL_MAX_CHARS = 512;
 const MIN_TIMEOUT_MS = 1_000;
@@ -43,8 +43,6 @@ const MAX_TIMEOUT_MS = 120_000;
 
 /** Printable ASCII with no space: what fits in an HTTP header value without escaping. */
 const PRINTABLE_TOKEN = /^[\x21-\x7e]+$/;
-/** A model id as the vendor spells one: a letter or digit, then letters, digits, dot, underscore or dash. */
-const MODEL_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 /** One DNS label: letters, digits and dashes, neither leading nor trailing a dash, at most 63 characters. */
 const DNS_LABEL = /^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
 
@@ -110,7 +108,7 @@ function readProbability(settings: ReadonlyMap<string, string>, settingName: str
     const rawValue = readSetting(settings, settingName);
     if (rawValue === undefined) return defaultValue;
     const probability = Number(rawValue);
-    if (!Number.isFinite(probability) || probability < 0 || probability > 1) {
+    if (!isProbability(probability)) {
         throw configurationError(`${settingName} '${toDisplayValue(rawValue)}' is not a probability -- give a number from 0 to 1, as ${defaultValue}`, { key: settingName });
     }
     return probability;
@@ -124,9 +122,7 @@ function readUncertainBand(settings: ReadonlyMap<string, string>, defaultValue: 
     const parts = rawValue.split(",");
     const low = Number(parts[0]);
     const high = Number(parts[1]);
-    const isWellFormed = parts.length === 2
-        && Number.isFinite(low) && Number.isFinite(high)
-        && low >= 0 && high <= 1 && low <= high;
+    const isWellFormed = parts.length === 2 && isProbability(low) && isProbability(high) && low <= high;
     if (!isWellFormed) {
         throw configurationError(
             `${settingName} '${toDisplayValue(rawValue)}' is not a band -- give two probabilities as 'low,high', as ${defaultValue[0]},${defaultValue[1]}`,
@@ -268,7 +264,7 @@ export function readConfig(configPath: string): TypeSafeConfig {
     const baseURL = readBaseURL(settings, endpointHost);
 
     const model = readSetting(settings, "TYPESAFE_MODEL") ?? DEFAULT_MODEL;
-    if (!MODEL_TOKEN.test(model) || model.length > MODEL_MAX_CHARS) {
+    if (!isModelName(model)) {
         throw configurationError(`TYPESAFE_MODEL '${toDisplayValue(model)}' is not a model id -- give a versioned name, as ${DEFAULT_MODEL}`, { key: "TYPESAFE_MODEL" });
     }
 
