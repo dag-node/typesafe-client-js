@@ -31,6 +31,34 @@ jobs:
           node-version: 22
           cache: npm
 
+      # Prove the signing key before building or publishing: a missing or unusable secret
+      # fails here rather than after the release page is already public, where a late failure
+      # strands a half-published release. Every release is signed, so an unusable key stops
+      # this job instead of publishing an unsigned artifact.
+      - name: Preflight the signing key
+        env:
+          GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
+          GPG_SIGNING_PASSPHRASE: ${{ secrets.GPG_SIGNING_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          [[ -n "${GPG_SIGNING_KEY}" ]] \
+            || { echo "::error::GPG_SIGNING_KEY is not set -- every release is signed"; exit 1; }
+          [[ -n "${GPG_SIGNING_PASSPHRASE}" ]] \
+            || { echo "::error::GPG_SIGNING_PASSPHRASE is not set -- the signing key is passphrase-protected"; exit 1; }
+          # The signing step reads the passphrase as one line on a descriptor; a multi-line
+          # value would truncate there, after the release is public.
+          [[ "${GPG_SIGNING_PASSPHRASE}" != *$'\n'* ]] \
+            || { echo "::error::GPG_SIGNING_PASSPHRASE must be single-line"; exit 1; }
+          # A keyring directory on tmpfs, wiped on exit: the key stays out of persistent disk,
+          # and it arrives on stdin rather than in a file or an argument, where a process
+          # listing would show it.
+          gnupghome="$(mktemp -d -p /dev/shm 2>/dev/null || mktemp -d)"
+          trap 'rm -rf "${gnupghome}"' EXIT
+          printf '%s\n' "${GPG_SIGNING_KEY}" | GNUPGHOME="${gnupghome}" gpg --batch --quiet --import \
+            || { echo "::error::GPG_SIGNING_KEY is not a usable ASCII-armored key"; exit 1; }
+          GNUPGHOME="${gnupghome}" gpg --batch --with-colons --list-secret-keys | grep -q '^sec:' \
+            || { echo "::error::GPG_SIGNING_KEY carries no secret key -- export the signing subkey"; exit 1; }
+
       - name: Install, check, and build
         run: |
           set -euo pipefail
@@ -54,9 +82,11 @@ jobs:
               exit 1
           fi
 
-      - name: Create the release and attach the artifact
+      - name: Create the release and attach the signed artifact
         env:
           GH_TOKEN: ${{ github.token }}
+          GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
+          GPG_SIGNING_PASSPHRASE: ${{ secrets.GPG_SIGNING_PASSPHRASE }}
         run: |
           set -euo pipefail
           # `dist` in the name, and the tag's own `v`, keep this apart from the source
@@ -76,11 +106,20 @@ jobs:
               --pax-option=exthdr.name=%d/PaxHeaders/%f,delete=atime,delete=ctime \
               -C dist -cf - . | gzip -n > "${asset}"
           sha256sum "${asset}" > "${asset}.sha256"
+          # Verify before publishing, so a signature that did not come out usable fails
+          # here rather than on the machine of whoever downloads it.
+          gnupghome="$(mktemp -d -p /dev/shm 2>/dev/null || mktemp -d)"
+          trap 'rm -rf "${gnupghome}"' EXIT
+          export GNUPGHOME="${gnupghome}"
+          printf '%s\n' "${GPG_SIGNING_KEY}" | gpg --batch --quiet --import
+          printf '%s' "${GPG_SIGNING_PASSPHRASE}" | gpg --batch --yes --pinentry-mode loopback \
+              --passphrase-fd 0 --armor --detach-sign --output "${asset}.asc" "${asset}"
+          gpg --batch --verify "${asset}.asc" "${asset}"
           # Semver reads anything after the first `-` as a prerelease, so v0.2.0-rc1 is
           # published as one and does not become the release a consumer is offered as latest.
           prerelease=()
           case "${GITHUB_REF_NAME}" in
               *-*) prerelease=(--prerelease) ;;
           esac
-          gh release create "${GITHUB_REF_NAME}" "${asset}" "${asset}.sha256" \
+          gh release create "${GITHUB_REF_NAME}" "${asset}" "${asset}.sha256" "${asset}.asc" \
               --verify-tag --generate-notes "${prerelease[@]}"
