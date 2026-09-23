@@ -27,6 +27,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+          cache: npm
 
       # The tag is the release authority, so it is checked before anything else runs. The key
       # that signs it is not one this workflow can use: the only signing secret here is
@@ -58,10 +61,6 @@ jobs:
                   "${GITHUB_REF_NAME}" "${TAG_SIGNING_PRIMARY_FPR}" "${status}" >&2
               exit 1
           fi
-
-        with:
-          node-version: 22
-          cache: npm
 
       # Prove the signing key before building or publishing: a missing or unusable secret
       # fails here rather than after the release page is already public, where a late failure
