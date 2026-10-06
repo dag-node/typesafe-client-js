@@ -66,11 +66,14 @@ jobs:
       # Prove the signing key before building or publishing: a missing or unusable secret
       # fails here rather than after the release page is already public, where a late failure
       # strands a half-published release. Every release is signed, so an unusable key stops
-      # this job instead of publishing an unsigned artifact.
+      # this job instead of publishing an unsigned artifact. The key is pinned the way the tag
+      # key is above: by the PRIMARY fingerprint, which a subkey rotation leaves alone, so a
+      # secret holding any other key is refused before it signs anything.
       - name: Preflight the signing key
         env:
           GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
           GPG_SIGNING_PASSPHRASE: ${{ secrets.GPG_SIGNING_PASSPHRASE }}
+          ARTIFACT_SIGNING_PRIMARY_FPR: 67F42DC18BF764B42D82F14256D2F802CF9832E4
         run: |
           set -euo pipefail
           [[ -n "${GPG_SIGNING_KEY}" ]] \
@@ -90,6 +93,13 @@ jobs:
             || { echo "::error::GPG_SIGNING_KEY is not a usable ASCII-armored key"; exit 1; }
           GNUPGHOME="${gnupghome}" gpg --batch --with-colons --list-secret-keys | grep -q '^sec:' \
             || { echo "::error::GPG_SIGNING_KEY carries no secret key -- export the signing subkey"; exit 1; }
+          # Fingerprints are public, so the imported key's identity is stated in the log, and a
+          # key other than the pinned one is one readable line rather than a release signed by
+          # a key no consumer trusts.
+          have="$(GNUPGHOME="${gnupghome}" gpg --batch --with-colons --list-secret-keys | awk -F: '$1=="fpr"{print $10; exit}')"
+          echo "imported signing key: primary ${have}"
+          [[ "${have}" == "${ARTIFACT_SIGNING_PRIMARY_FPR}" ]] \
+            || { echo "::error::GPG_SIGNING_KEY is key ${have}, not the org signing key ${ARTIFACT_SIGNING_PRIMARY_FPR} -- a different primary is a different key, not a rotation; set the export of the org key's signing subkey, or change ARTIFACT_SIGNING_PRIMARY_FPR here for a planned primary rotation"; exit 1; }
 
       - name: Install, check, and build
         run: |
