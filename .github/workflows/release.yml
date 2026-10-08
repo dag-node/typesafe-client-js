@@ -26,7 +26,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      # The write token is not stored in .git/config: the tag fetch below reads this public
+      # repository without it, and `gh release create` takes it from GH_TOKEN in its own step.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
@@ -54,7 +58,10 @@ jobs:
           gnupghome="$(mktemp -d)"
           trap 'rm -rf "${gnupghome}"' EXIT
           export GNUPGHOME="${gnupghome}"
-          curl -fsS "${TAG_SIGNING_KEY_URL}" | gpg --batch --quiet --import
+          # HTTPS alone, redirects included, and bounded: the key is public, so the pin above
+          # is the check, and the transport is kept from downgrading or hanging the job.
+          curl -fsS --proto '=https' --proto-redir '=https' --max-time 120 "${TAG_SIGNING_KEY_URL}" \
+              | gpg --batch --quiet --import
           # `--raw` prints GnuPG's status lines. VALIDSIG names the subkey that signed and, as
           # its last field, the primary that certified it -- which is the field pinned here.
           status="$(git verify-tag --raw "${GITHUB_REF_NAME}" 2>&1)"
@@ -128,9 +135,11 @@ jobs:
               exit 1
           fi
 
-      - name: Create the release and attach the signed artifact
+      # The signing key and the release token are held by different steps: this one signs and
+      # holds no token, the next one publishes and holds no key, and this step's trap has wiped
+      # the keyring before the next starts.
+      - name: Build the archive, sign it, and re-verify
         env:
-          GH_TOKEN: ${{ github.token }}
           GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
           GPG_SIGNING_PASSPHRASE: ${{ secrets.GPG_SIGNING_PASSPHRASE }}
         run: |
@@ -165,11 +174,18 @@ jobs:
           printf '%s' "${GPG_SIGNING_PASSPHRASE}" | gpg --batch --yes --pinentry-mode loopback \
               --passphrase-fd 0 --armor --detach-sign --output "${asset}.asc" "${asset}"
           gpg --batch --verify "${asset}.asc" "${asset}"
+          echo "ASSET=${asset}" >> "$GITHUB_ENV"
+
+      - name: Create the release and attach the signed artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
           # Semver reads anything after the first `-` as a prerelease, so v0.2.0-rc1 is
           # published as one and does not become the release a consumer is offered as latest.
           prerelease=()
           case "${GITHUB_REF_NAME}" in
               *-*) prerelease=(--prerelease) ;;
           esac
-          gh release create "${GITHUB_REF_NAME}" "${asset}" "${asset}.sha256" "${asset}.asc" \
+          gh release create "${GITHUB_REF_NAME}" "${ASSET}" "${ASSET}.sha256" "${ASSET}.asc" \
               --verify-tag --generate-notes "${prerelease[@]}"
