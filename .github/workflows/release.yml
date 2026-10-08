@@ -22,6 +22,7 @@ jobs:
   release:
     environment: release
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
     steps:
@@ -84,11 +85,14 @@ jobs:
           # value would truncate there, after the release is public.
           [[ "${GPG_SIGNING_PASSPHRASE}" != *$'\n'* ]] \
             || { echo "::error::GPG_SIGNING_PASSPHRASE must be single-line"; exit 1; }
-          # A keyring directory on tmpfs, wiped on exit: the key stays out of persistent disk,
-          # and it arrives on stdin rather than in a file or an argument, where a process
-          # listing would show it.
-          gnupghome="$(mktemp -d -p /dev/shm 2>/dev/null || mktemp -d)"
-          trap 'rm -rf "${gnupghome}"' EXIT
+          # A keyring directory on tmpfs alone, wiped on exit with its agent: a /dev/shm that is
+          # absent or not tmpfs refuses, so the key stays out of a disk-backed directory, and it
+          # arrives on stdin rather than in a file or an argument, where a process listing would
+          # show it.
+          [[ -d /dev/shm && "$(stat -f -c %T /dev/shm 2>/dev/null)" == tmpfs ]] \
+            || { echo "::error::/dev/shm is absent or not tmpfs"; exit 1; }
+          gnupghome="$(mktemp -d -p /dev/shm)" || { echo "::error::no directory could be created under /dev/shm"; exit 1; }
+          trap 'GNUPGHOME="${gnupghome}" gpgconf --kill gpg-agent 2>/dev/null; rm -rf "${gnupghome}"' EXIT
           printf '%s\n' "${GPG_SIGNING_KEY}" | GNUPGHOME="${gnupghome}" gpg --batch --quiet --import \
             || { echo "::error::GPG_SIGNING_KEY is not a usable ASCII-armored key"; exit 1; }
           GNUPGHOME="${gnupghome}" gpg --batch --with-colons --list-secret-keys | grep -q '^sec:' \
@@ -150,9 +154,12 @@ jobs:
               -C dist -cf - . -C "${PWD}" ./LICENSE ./CHANGELOG.md | gzip -n > "${asset}"
           sha256sum "${asset}" > "${asset}.sha256"
           # Verify before publishing, so a signature that did not come out usable fails
-          # here rather than on the machine of whoever downloads it.
-          gnupghome="$(mktemp -d -p /dev/shm 2>/dev/null || mktemp -d)"
-          trap 'rm -rf "${gnupghome}"' EXIT
+          # here rather than on the machine of whoever downloads it. The keyring is this step's
+          # own, on tmpfs alone, as in the preflight.
+          [[ -d /dev/shm && "$(stat -f -c %T /dev/shm 2>/dev/null)" == tmpfs ]] \
+            || { echo "::error::/dev/shm is absent or not tmpfs"; exit 1; }
+          gnupghome="$(mktemp -d -p /dev/shm)" || { echo "::error::no directory could be created under /dev/shm"; exit 1; }
+          trap 'GNUPGHOME="${gnupghome}" gpgconf --kill gpg-agent 2>/dev/null; rm -rf "${gnupghome}"' EXIT
           export GNUPGHOME="${gnupghome}"
           printf '%s\n' "${GPG_SIGNING_KEY}" | gpg --batch --quiet --import
           printf '%s' "${GPG_SIGNING_PASSPHRASE}" | gpg --batch --yes --pinentry-mode loopback \
